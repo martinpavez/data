@@ -135,6 +135,9 @@ class MultivariatePCA(Index):
         self.box = box_limit
 
         self.calculate_index()
+    
+    def __str__(self):
+        return f"PCA on box {self.box} with variables {list(self.variables_dict.values())}"
         
 
     def calculate_index(self):
