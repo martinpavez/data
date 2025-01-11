@@ -116,7 +116,9 @@ class MultivariatePCA(Index):
     Index : Base class for climate indices.
     """
 
-    def __init__(self, data: xr.Dataset, n_modes: int, reference_period:list, variables=["SST", "SP", "TTR", "U10", "V10"], box_limit=[100,290,-30,30]):
+    def __init__(self, data: xr.Dataset, n_modes: int, reference_period:list,
+                  variables=["SST", "SP", "TTR", "U10", "V10"], box_limit=[100,290,-30,30],
+                    rolling_window=2, frequency="monthly"):
         super().__init__(data)
         self.data = self.data.sel(longitude=slice(box_limit[0], box_limit[1]), latitude=slice(box_limit[2],box_limit[3]))
         self.variables_dict = { i+1: variables[i] for i in range(len(variables))}
@@ -131,16 +133,20 @@ class MultivariatePCA(Index):
         self.explained_variance = {}
         self.grid_shape = (self.data.sizes["latitude"], self.data.sizes["longitude"])
         self.n_variables = len(variables)
-        
-        self.box = box_limit
+        self.rolling_window = rolling_window
+        self.freq = frequency
 
-        self.calculate_index()
+        self.box = box_limit
+        if frequency=="monthly":
+            self.calculate_index_monthly()
+        elif frequency=="yearly":
+            self.calculate_index_yearly()
     
     def __str__(self):
         return f"PCA on box {self.box} with variables {list(self.variables_dict.values())}"
         
 
-    def calculate_index(self):
+    def calculate_index_monthly(self):
         """
         Calculates PCA index for each month and stores principal components and explained variance.
         """
@@ -151,6 +157,41 @@ class MultivariatePCA(Index):
         self.correct_pca()
         
         self.get_full_index()
+
+    def calculate_index_yearly(self):
+        yearly = self.data.groupby('time.year').mean('time')
+        flatten_yearly, valid_columns = flatten_vector(yearly, yearly.sizes["year"])
+
+        cov_matrix = np.matmul(flatten_yearly, flatten_yearly.T)/(flatten_yearly.shape[0]-1)
+        N = cov_matrix.shape[0]
+        D, V= sp.linalg.eigh(cov_matrix, subset_by_index=[N-self.n_modes,N-1])
+
+        # Reverse for descending order
+        D = D[::-1]
+        V = V[:, ::-1]
+
+        pcs = []
+        modes = []
+
+        for i in range(self.n_modes):
+            # Project kth eigenvector onto the original space
+            V_k = np.matmul(flatten_yearly.T, V[:, i])
+
+            # Normalize the mode
+            sq = np.sqrt(D[i])
+            V_k = V_k / sq
+
+            # Compute the principal component time series
+            pc_k = V_k.T @ flatten_yearly.T / (np.dot(V_k.T, V_k))
+
+            pcs.append(pc_k)
+            modes.append(V_k)
+        
+        self.pcs = np.array(pcs)
+        self.explained_variance = D / np.trace(cov_matrix)
+        self.modes = self.map_modes_to_full_grid(np.array(modes), valid_columns)
+
+        self.get_full_index_yearly()
     
     def correct_pca(self):
         """
@@ -182,8 +223,10 @@ class MultivariatePCA(Index):
             - Array of modes.
             - Boolean mask for valid columns.
         """
-
-        bimonthly = self.data.rolling(time=2, center=True).mean() #first month is DJ
+        if self.rolling_window > 1:
+            bimonthly = self.data.rolling(time=self.rolling_window, center=True).mean() #first month is DJ
+        else:
+            bimonthly = self.data
         target_bimonth = bimonthly.sel(time=is_month(bimonthly['time.month'], biseason))
         target_bimonth = target_bimonth.sel(time=slice(f"{self.start_year}-01", f"{self.end_year}-12"))
 
@@ -291,14 +334,25 @@ class MultivariatePCA(Index):
                     aux_index.append(self.pcs[f"{k}"][mod][i])
             self.index[f"PC-{mod+1}"] = np.array(aux_index)
     
+    def get_full_index_yearly(self):
+        """
+        Compile the full index.
+        """
+        self.index = {}
+        for mod in range(self.n_modes):
+            self.index[f"PC-{mod+1}"] = np.array(self.pcs[mod])
+    
     def get_index(self, mode: int, start_year=1980, end_year=2022):
         """
         Retrieves the full index.
         """
         if (start_year-self.start_year < 0) or (self.end_year-end_year < 0):
-            print("Can not require for not calculated years")
+            print("Can not retrieve for not calculated years")
         else:
-            return self.index[f"PC-{mode}"][(start_year-self.start_year)*12:(end_year-self.start_year+1)*12]
+            if self.freq=="monthly":
+                return self.index[f"PC-{mode}"][(start_year-self.start_year)*12:(end_year-self.start_year+1)*12]
+            elif self.freq=="yearly":
+                return self.index[f"PC-{mode}"][(start_year-self.start_year):(end_year-self.start_year+1)]
     
     def get_index_by_season(self, season: int, mode: int, start_year=1980, end_year=2022):
         """
@@ -316,12 +370,19 @@ class MultivariatePCA(Index):
         This function creates a bar plot for each biseason (1 to 12), showing the explained variance
         by each mode. Each subplot has its own scaling and labels.
         """
-        fig, axs = plt.subplots(3, 4, figsize=(20,20))
-        for i in range(12):
-            axs.flatten()[i].bar(np.linspace(1,self.n_modes,self.n_modes), self.explained_variance[f"{i+1}"])
-            axs.flatten()[i].set_ylim([0,2*np.max(self.explained_variance[f"{i+1}"])])
-            axs.flatten()[i].set_title(f"Variance explained per mode for biseason {i+1}")
-            axs.flatten()[i].set_xticks([i for i in range(1, self.n_modes+1)])
+        if self.freq=="monthly":
+            fig, axs = plt.subplots(3, 4, figsize=(20,20))
+            for i in range(12):
+                axs.flatten()[i].bar(np.linspace(1,self.n_modes,self.n_modes), self.explained_variance[f"{i+1}"])
+                axs.flatten()[i].set_ylim([0,2*np.max(self.explained_variance[f"{i+1}"])])
+                axs.flatten()[i].set_title(f"Variance explained per mode for biseason {i+1}")
+                axs.flatten()[i].set_xticks([i for i in range(1, self.n_modes+1)])
+        elif self.freq=="yearly":
+            fig, ax = plt.subplots(figsize=(10,10))
+            ax.bar(np.linspace(1,self.n_modes,self.n_modes), self.explained_variance)
+            ax.set_ylim([0,2*np.max(self.explained_variance)])
+            ax.set_title(f"Variance explained per mode")
+            ax.set_xticks([i for i in range(1, self.n_modes+1)])
         plt.show()
 
 
