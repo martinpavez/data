@@ -408,28 +408,38 @@ def plot_hw_index(hwis_orig: pd.DataFrame, stat: list ,idx:MultivariatePCA, mode
 
     if len(stat) > 1:
         for k in range(len(stat)):
-            corr = np.corrcoef(hwis[f"{stat[k]}"],idx.get_index(mode, start_year=start, end_year=end))[0,1]
+            if idx and mode:
+                    
+                corr = np.corrcoef(hwis[f"{stat[k]}"],idx.get_index(mode, start_year=start, end_year=end))[0,1]
 
-            ax[k].plot(hwis.index, hwis[f"{stat[k]}"], color="red")
-            yabs_max = abs(max(ax[k].get_ylim(), key=abs))
-            ax[k].set_ylim(ymin=-yabs_max, ymax=yabs_max)
-            ax[k].set_title(f"{stat[k]} and PC-{mode}, Corr: {np.round(corr,2)}")
+                ax[k].plot(hwis.index, hwis[f"{stat[k]}"], color="red")
+                yabs_max = abs(max(ax[k].get_ylim(), key=abs))
+                ax[k].set_ylim(ymin=-yabs_max, ymax=yabs_max)
+                ax[k].set_title(f"{stat[k]} and PC-{mode}, Corr: {np.round(corr,2)} from {start} to {end}")
 
-            ax2 = ax[k].twinx()
+                ax2 = ax[k].twinx()
+                ax2.plot(hwis.index, idx.get_index(mode, start_year=start, end_year=end), color="blue")
+                yabs_max = abs(max(ax2.get_ylim(), key=abs))
+                ax2.set_ylim(ymin=-yabs_max, ymax=yabs_max)
+            else:
+                ax[k].plot(hwis.index, hwis[f"{stat[k]}"], color="red")
+                ax[k].set_title(f"{stat[k]} from {start} to {end}")
+
+    else:
+        if idx and mode:
+            corr = np.corrcoef(hwis[f"{stat[0]}"],idx.get_index(mode, start_year=start, end_year=end))[0,1]
+
+            ax.plot(hwis.index, hwis[f"{stat[0]}"], color="red")
+            yabs_max = abs(max(ax.get_ylim(), key=abs))
+            ax.set_ylim(ymin=-yabs_max, ymax=yabs_max)
+            ax.set_title(f"{stat[0]} and PC-{mode}, Corr: {np.round(corr,2)} from {start} to {end}")
+            ax2 = ax.twinx()
             ax2.plot(hwis.index, idx.get_index(mode, start_year=start, end_year=end), color="blue")
             yabs_max = abs(max(ax2.get_ylim(), key=abs))
             ax2.set_ylim(ymin=-yabs_max, ymax=yabs_max)
-    else:
-        corr = np.corrcoef(hwis[f"{stat[0]}"],idx.get_index(mode, start_year=start, end_year=end))[0,1]
-
-        ax.plot(hwis.index, hwis[f"{stat[0]}"], color="red")
-        yabs_max = abs(max(ax.get_ylim(), key=abs))
-        ax.set_ylim(ymin=-yabs_max, ymax=yabs_max)
-        ax.set_title(f"{stat[0]} and PC-{mode}, Corr: {np.round(corr,2)}")
-        ax2 = ax.twinx()
-        ax2.plot(hwis.index, idx.get_index(mode, start_year=start, end_year=end), color="blue")
-        yabs_max = abs(max(ax2.get_ylim(), key=abs))
-        ax2.set_ylim(ymin=-yabs_max, ymax=yabs_max)
+        else:
+            ax.plot(hwis.index, hwis[f"{stat[0]}"], color="red")
+            ax.set_title(f"{stat[0]} from {start} to {end}")
         
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
@@ -455,21 +465,30 @@ def plot_hw_index_by_season(hwis: pd.DataFrame, stat: str, idx:MultivariatePCA, 
     hwis = hwis[(hwis.index.year <= end) & (hwis.index.year >= start)]
 
     for i in range(12):
-        hwis_month = hwis[hwis.index.month==i+1]
-        corr = np.corrcoef(hwis_month[f"{stat}"], idx.get_index_by_season(i+1, mode, start_year=start, end_year=end))[0,1]
-        axs.flatten()[i].plot(hwis_month.index, hwis_month[f"{stat}"], color="red")
-        yabs_max = abs(max(axs.flatten()[i].get_ylim(), key=abs))
-        axs.flatten()[i].set_ylim(ymin=-yabs_max, ymax=yabs_max)
-        axs.flatten()[i].set_title(f"Biseason {i+1}, Corr: {np.round(corr,2)}")
+        if idx and mode:
+            hwis_month = hwis[hwis.index.month==i+1]
+            corr = np.corrcoef(hwis_month[f"{stat}"], idx.get_index_by_season(i+1, mode, start_year=start, end_year=end))[0,1]
+            axs.flatten()[i].plot(hwis_month.index, hwis_month[f"{stat}"], color="red")
+            yabs_max = abs(max(axs.flatten()[i].get_ylim(), key=abs))
+            axs.flatten()[i].set_ylim(ymin=-yabs_max, ymax=yabs_max)
+            axs.flatten()[i].set_title(f"Biseason {i+1}, Corr: {np.round(corr,2)}")
+            fig.suptitle(f"{stat} and PC-{mode} per season for years {start} to {end}")
 
-        ax2 = axs.flatten()[i].twinx()
-        ax2.plot(hwis_month.index, idx.get_index_by_season(i+1, mode, start_year=start, end_year=end), color="blue")
-        yabs_max = abs(max(ax2.get_ylim(), key=abs))
-        ax2.set_ylim(ymin=-yabs_max, ymax=yabs_max)
+
+            ax2 = axs.flatten()[i].twinx()
+            ax2.plot(hwis_month.index, idx.get_index_by_season(i+1, mode, start_year=start, end_year=end), color="blue")
+            yabs_max = abs(max(ax2.get_ylim(), key=abs))
+            ax2.set_ylim(ymin=-yabs_max, ymax=yabs_max)
+
+        else:
+            hwis_month = hwis[hwis.index.month==i+1]
+            axs.flatten()[i].plot(hwis_month.index, hwis_month[f"{stat}"], color="red")
+            axs.flatten()[i].set_title(f"Biseason {i+1}")
+
+            fig.suptitle(f"{stat} from {start} to {end}")
 
 
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])  # otherwise the right y-label is slightly clipped
-    fig.suptitle(f"{stat} and PC-{mode} per season")
     plt.show()
 
 def scatter_color_year(hwis_orig: pd.DataFrame, stat: list, idx, mode: int, start=1980, end=2022):
