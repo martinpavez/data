@@ -1,19 +1,9 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import xarray as xr
-import scipy as sp
-import os
 from itertools import combinations
 
-import sys
-import seaborn as sns
 import re
 import pickle
-
-
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 
 from IndexDrivers import MultivariatePCA
 
@@ -77,6 +67,87 @@ def compute_correlations(df, num_indices=5, method='pearson'):
     )
     
     return correlation_df
+
+def build_pos_neg_corr_df(data, label_columns, methods=["pearson","spearman"]):
+    correlations = { met: compute_correlations(data, num_indices=len(label_columns),method=met) for met in methods}
+    any_correlations = {
+        "positive": {met: [] for met in methods},
+        "negative": {met: [] for met in methods}
+    }
+    # Iterate over each correlation matrix and collect pairs
+    for method, corr_df in correlations.items():
+        for timeserie, row in corr_df.iterrows():
+            for index, value in row.items():
+                if value > 0:
+                    any_correlations["positive"][method].append((timeserie, index, value))
+                elif value < 0:
+                    any_correlations["negative"][method].append((timeserie, index, value))
+
+    positive_corr_any_df = {
+        method: pd.DataFrame(pairs, columns=["Timeserie", "Index", "Correlation"])
+        for method, pairs in any_correlations["positive"].items()
+    }
+    negative_corr_any_df = {
+        method: pd.DataFrame(pairs, columns=["Timeserie", "Index", "Correlation"])
+        for method, pairs in any_correlations["negative"].items()
+    }
+    return [positive_corr_any_df, negative_corr_any_df]
+
+def build_df_correlations_monthly(dict_predictors, season_corr_dict, methods=["pearson", "spearman"]):
+    any_correlations_list = []
+    for month, (positive_corr_dict, negative_corr_dict) in season_corr_dict.items():
+        # Combine positive and negative correlations for each method
+        for method in methods:
+            if method in positive_corr_dict:
+                for _, row in positive_corr_dict[method].iterrows():
+                    any_correlations_list.append((month, method, *row))
+            
+            if method in negative_corr_dict:
+                for _, row in negative_corr_dict[method].iterrows():
+                    any_correlations_list.append((month, method, *row))
+    # Convert the collected data to a DataFrame for easier processing
+    correlations_df = pd.DataFrame(
+        any_correlations_list, columns=["Season", "Method", "PC", "Index", "Correlation"]
+    )
+    correlations_df['ID'] = correlations_df['PC'].apply(lambda x: re.search(r'PC_(.*?)-Mode-', x).group(1))
+    correlations_df['Variance'] = correlations_df.apply(lambda x: dict_predictors[int(x.ID)].explained_variance[str(x.Season)][int(x.PC[-1])-1], axis=1)
+
+    return correlations_df
+
+def build_df_correlations_yearly(dict_predictors, pos_neg_df, methods=["pearson", "spearman"]):
+    all_correlations = []
+
+    for method in ["pearson", "spearman"]:
+        if method in pos_neg_df[0]:
+            for _, row in pos_neg_df[0][method].iterrows():
+                all_correlations.append((method, *row))
+        
+        if method in pos_neg_df[1]:
+            for _, row in pos_neg_df[1][method].iterrows():
+                all_correlations.append(( method, *row))
+
+    # Convert the collected data to a DataFrame for easier processing
+    correlations_df = pd.DataFrame(
+        all_correlations, columns=["Method", "PC", "Index", "Correlation"]
+    )
+    correlations_df['ID'] = correlations_df['PC'].apply(lambda x: re.search(r'PC_(.*?)-Mode-', x).group(1))
+    # Sort by the absolute value of the correlation and get the top 10
+
+    ## Include explained variance
+    correlations_df['Variance'] = correlations_df.apply(lambda x: dict_predictors[int(x.ID)].explained_variance[int(x.PC[-1])-1], axis=1)
+    return correlations_df
+
+def get_top_corr(all_corr_df, top_n):
+    top_correlations = all_corr_df.reindex(
+        all_corr_df["Correlation"].abs().sort_values(ascending=False).index
+    )
+    top_list = []
+    for pc in list(top_correlations["PC"]):
+        if len(top_list)==top_n:
+            break
+        elif pc not in top_list:
+            top_list.append(pc)
+    return top_list
 
 ### PREDICTORS FUNCTIONS
 
@@ -159,85 +230,55 @@ class PCAPredictors(Predictor):
         
         self.experiments[self.num_experiments] = {}
         self.df_label_predictors = pd.concat([label_data, self.df_predictors], axis=1)
-        seasons_any_corr = {}
+        if self.frequency=="monthly":
+            seasons_any_corr = {}
 
-        for i in range(12):
-            hwis_month = self.df_label_predictors[self.df_label_predictors.index.month == i+1]
-            correlations = { met: compute_correlations(hwis_month, num_indices=len(list(label_data.columns)),method=met) for met in methods}
-
-            any_correlations = {
-                "positive": {met: [] for met in methods},
-                "negative": {met: [] for met in methods}
-            }
-            # Iterate over each correlation matrix and collect pairs
-            for method, corr_df in correlations.items():
-                for timeserie, row in corr_df.iterrows():
-                    for index, value in row.items():
-                        if value > 0:
-                            any_correlations["positive"][method].append((timeserie, index, value))
-                        elif value < 0:
-                            any_correlations["negative"][method].append((timeserie, index, value))
-
-            positive_corr_any_df = {
-                method: pd.DataFrame(pairs, columns=["Timeserie", "Index", "Correlation"])
-                for method, pairs in any_correlations["positive"].items()
-            }
-            negative_corr_any_df = {
-                method: pd.DataFrame(pairs, columns=["Timeserie", "Index", "Correlation"])
-                for method, pairs in any_correlations["negative"].items()
-            }
-            seasons_any_corr[i+1] = [positive_corr_any_df, negative_corr_any_df]
-
-        any_correlations_list = []
-
-        for month, (positive_corr_dict, negative_corr_dict) in seasons_any_corr.items():
-            # Combine positive and negative correlations for each method
-            for method in methods:
-                if method in positive_corr_dict:
-                    for _, row in positive_corr_dict[method].iterrows():
-                        any_correlations_list.append((month, method, *row))
+            for i in range(12):
+                hwis_month = self.df_label_predictors[self.df_label_predictors.index.month == i+1]
                 
-                if method in negative_corr_dict:
-                    for _, row in negative_corr_dict[method].iterrows():
-                        any_correlations_list.append((month, method, *row))
-        # Convert the collected data to a DataFrame for easier processing
-        any_correlations_df = pd.DataFrame(
-            any_correlations_list, columns=["Season", "Method", "PC", "Index", "Correlation"]
-        )
-        any_correlations_df['ID'] = any_correlations_df['PC'].apply(lambda x: re.search(r'PC_(.*?)-Mode-', x).group(1))
-        any_correlations_df['Variance'] = any_correlations_df.apply(lambda x: self.dict_predictors[int(x.ID)].explained_variance[str(x.Season)][int(x.PC[-1])-1], axis=1)
+                seasons_any_corr[i+1] = build_pos_neg_corr_df(hwis_month, list(label_data.columns), methods=methods)
 
-        if threshold_corr:
-            corr_positive = any_correlations_df[any_correlations_df["Correlation"] >= threshold_corr]
-            corr_negative = any_correlations_df[any_correlations_df["Correlation"] <= -1*threshold_corr]
-            any_correlations_df = pd.concat([corr_positive, corr_negative], axis=0)
-        if threshold_variance:
-            any_correlations_df = any_correlations_df[any_correlations_df["Variance"] >= threshold_variance]
+            any_correlations_df = build_df_correlations_monthly(self.dict_predictors, seasons_any_corr, methods=methods)
 
-        top_corr_per_season= { }
-        for i in range(1,13):
-            month_corr = any_correlations_df[any_correlations_df["Season"]==i]
-            top_corr = month_corr.reindex(
-            month_corr["Correlation"].abs().sort_values(ascending=False).index
-            )
-            top_corr_per_season[i] = []
-            k = 0
-            for pc in list(top_corr["PC"]):
-                if len(top_corr_per_season[i]) == top_n:
-                    break
-                elif pc not in top_corr_per_season[i]:
-                    top_corr_per_season[i].append(pc)
-            df_top_predictors = self.df_label_predictors[self.df_label_predictors.index.month==i][list(label_data.columns) + top_corr_per_season[i]]
-            self.experiments[self.num_experiments][i] = df_top_predictors
+            if threshold_corr:
+                corr_positive = any_correlations_df[any_correlations_df["Correlation"] >= threshold_corr]
+                corr_negative = any_correlations_df[any_correlations_df["Correlation"] <= -1*threshold_corr]
+                any_correlations_df = pd.concat([corr_positive, corr_negative], axis=0)
+            if threshold_variance:
+                any_correlations_df = any_correlations_df[any_correlations_df["Variance"] >= threshold_variance]
+
+            top_corr_per_season= { }
+            for i in range(1,13):
+                month_corr = any_correlations_df[any_correlations_df["Season"]==i]
+                top_corr_per_season[i] = get_top_corr(month_corr, top_n)
+                df_top_predictors = self.df_label_predictors[self.df_label_predictors.index.month==i][list(label_data.columns) + top_corr_per_season[i]]
+                self.experiments[self.num_experiments][i] = df_top_predictors
+
+        elif self.frequency=="yearly":
+            pos_df, neg_df = build_pos_neg_corr_df(self.df_label_predictors, list(label_data.columns), methods=methods)
+            all_correlations_df = build_df_correlations_yearly(self.dict_predictors, [pos_df, neg_df], methods=methods)
+            if threshold_corr:
+                corr_positive = all_correlations_df[all_correlations_df["Correlation"] >= threshold_corr]
+                corr_negative = all_correlations_df[all_correlations_df["Correlation"] <= -1*threshold_corr]
+                all_correlations_df = pd.concat([corr_positive, corr_negative], axis=0)
+            if threshold_variance:
+                all_correlations_df = all_correlations_df[all_correlations_df["Variance"] >= threshold_variance]
+            
+            top_corr = get_top_corr(all_correlations_df, top_n)
+
+            df_top_predictors = self.df_label_predictors[list(label_data.columns) + top_corr]
+            self.experiments[self.num_experiments] = df_top_predictors
         
         self.num_experiments += 1
-        
         return self.experiments[self.num_experiments-1], self.num_experiments-1
-
+    
     def experiment_to_csv(self, experiment, folder_path, name):
         dfs = self.experiments[experiment]
-        for season, df in dfs.items():
-            df.to_csv(f"{folder_path}/{name}_{season}.csv")
+        if self.frequency == "monthly":
+            for season, df in dfs.items():
+                df.to_csv(f"{folder_path}/{name}_{season}.csv")
+        elif self.frequency=="yearly":
+            dfs.to_csv(f"{folder_path}/{name}.csv")
         print("Saved")
         return
     

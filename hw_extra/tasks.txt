@@ -1,0 +1,6 @@
+TASKS by 02/17:
+
+- Clean notebooks using built classes
+- Complete classes for yearly frequency (features and predictions)
+- Use t2m data for using land boxes
+- Gather best results for prediction (specially Cross Validated)
