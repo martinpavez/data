@@ -22,6 +22,20 @@ def highlight_positions(data, threshold, labels, above=True):
                         styles.iloc[row, col] = 'background-color: blue;'
     return styles
 
+def get_top_n_indices(df: pd.DataFrame, n: int = 3):
+    # Extract numeric columns (last 6 columns)
+    float_df = df.iloc[:, 4:]
+    
+    # Flatten the dataframe and get positions
+    stacked = float_df.stack()
+    
+    # Get top n largest values
+    top_n = stacked.nlargest(n)
+    
+    # Convert index to row, column positions
+    indices = [(df.iloc[row, 0], df.iloc[row, 1], col, value) for (row, col), value in top_n.items()]
+    
+    return indices
 
 ### PREDICTION
 
@@ -39,17 +53,16 @@ class PredictionModel():
         self.name_regressor = name_regressor
 
     def form_matrix(self, data):
-        data['Date'] = pd.to_datetime(data['Date'])
-        data['Date'] = data['Date'].dt.to_period('M').astype(str)
+        #data['Date'] = pd.to_datetime(data['Date'])
+        #data['Date'] = data['Date'].dt.to_period('M').astype(str)
 
-        features = data.columns.difference(["Date"]+ self.labels)
+        features = data.columns.difference(self.labels)
         
         return data, features
     
     def train(self, len_pred):
         X = self.data[self.features]
         y = self.data[self.labels]
-        dates = self.data["Date"]
         
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
@@ -68,7 +81,6 @@ class PredictionModel():
     def predict(self, len_pred):
         X = self.data[self.features]
         y = self.data[self.labels]
-        dates = self.data["Date"]
         
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
@@ -142,22 +154,22 @@ class PredictionModel():
     
     def get_metric(self, metric, stage="prediction"):
         if metric == "cv_r2":
-            return [self.name_regressor, self.season] + list(self.cv_score) + [self.cv_score_average]
+            return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_score) + [self.cv_score_average]
         if stage == "prediction":
             if metric == "r2":
-                return [self.name_regressor, self.season] + list(self.r2_pred) + [self.r2_average_pred]
+                return [self.name_regressor, self.season, metric, stage] + list(self.r2_pred) + [self.r2_average_pred]
             elif metric == "mae":
-                return [self.name_regressor, self.season] + list(self.mae_pred)+ [self.mae_average_pred]
+                return [self.name_regressor, self.season, metric, stage] + list(self.mae_pred)+ [self.mae_average_pred]
             elif metric == "mape":
-                return [self.name_regressor, self.season] + list(self.mape_pred)+ [self.mape_average_pred]
+                return [self.name_regressor, self.season, metric, stage] + list(self.mape_pred)+ [self.mape_average_pred]
 
         elif stage=="training":
             if metric == "r2":
-                return [self.name_regressor, self.season] + list(self.r2_training)+ [self.r2_average_training]
+                return [self.name_regressor, self.season, metric, stage] + list(self.r2_training)+ [self.r2_average_training]
             elif metric == "mae":
-                return [self.name_regressor, self.season] + list(self.mae_training)+ [self.mae_average_training]
+                return [self.name_regressor, self.season, metric, stage] + list(self.mae_training)+ [self.mae_average_training]
             elif metric == "mape":
-                return [self.name_regressor, self.season] + list(self.mape_training)+ [self.mape_average_training]
+                return [self.name_regressor, self.season, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
     
     def cross_validate(self, cv=5):
         X, y = self.data[self.features], self.data[self.labels]
@@ -166,14 +178,18 @@ class PredictionModel():
 
 
 class PredictionExperiment():
+    """
+    One PredictionExperiment correspond to one id experiment. It contains multiple results inside only bc of different metrics 
+    """
+    
     def __init__(self, data, labels, regressors, name_regressors, len_pred, frequency="bimonthly"):
         self.seasons = data.keys()
         self.labels = labels
         self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
         self.len_pred = len_pred
 
-        self.num_experiment = 0
-        self.experiments = {}
+        self.num_results = 0
+        self.results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
         
     
     def execute_experiment(self):
@@ -181,11 +197,19 @@ class PredictionExperiment():
             for model in models:
                 model.train_predict(self.len_pred)
 
-    def plot_metrics(self, metric, stage="prediction", thresh=0.5, above=True):
-        results = pd.DataFrame(columns=["Model", "Season"]+self.labels + ["Average"])
+    def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
+        results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
         for season in self.seasons:
             for model in self.models[season]:
                 results.loc[len(results.index)] = model.get_metric(metric, stage)
-        self.experiments[self.num_experiment] = results
-        self.num_experiment += 1
-        return results.style.set_caption(f"{metric} Model Results for {stage}").format(precision=2).apply(highlight_positions, threshold=thresh, above=above, labels=self.labels, axis=None)
+        self.results = pd.concat([self.results, results])
+        self.num_results += 1
+        if show:
+            return results.style.set_caption(f"{metric} Model Results for {stage}").format(precision=2).apply(highlight_positions, threshold=thresh, above=above, labels=self.labels, axis=None)
+        else:
+            return
+    
+    def top_results(self, metric, top_n, stage="prediction"):
+        df_metric = self.results[self.results["Metric"]==metric]
+        top = pd.DataFrame(get_top_n_indices(df_metric, top_n), columns=["Model", "Season", "Index", "Value"])
+        return top

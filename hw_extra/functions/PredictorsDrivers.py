@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from itertools import combinations
-
+import uuid
 import re
 import pickle
 
@@ -177,6 +177,7 @@ class PCAPredictors(Predictor):
             self.boxes = boxes
         else:
             self.boxes = self.default_boxes()
+            self.boxes_id = 0
         
         self.variables = total_variables
         if saved_pcas:
@@ -187,6 +188,7 @@ class PCAPredictors(Predictor):
         self.df_label_predictors = None
         self.experiments = {}
         self.num_experiments = 0
+        self.data_experiments= {}
 
     def calculate_predictors(self):
         var_combi = []
@@ -226,11 +228,19 @@ class PCAPredictors(Predictor):
 
     def top_correlations_predictors(self, label_data, top_n=10,
                                     methods = ["pearson", "spearman"], threshold_corr=None, 
-                                    threshold_variance = None, save=False, save_path=None):
+                                    threshold_variance = None):
         
-        self.experiments[self.num_experiments] = {}
+        
         self.df_label_predictors = pd.concat([label_data, self.df_predictors], axis=1)
+        if methods==["pearson", "spearman"]:
+            label_methods = "ps"
+        elif methods==["pearson"]:
+            label_methods = "p"
+        else:
+            label_methods = "s"
+
         if self.frequency=="monthly":
+            self.experiments[self.num_experiments] = {}
             seasons_any_corr = {}
 
             for i in range(12):
@@ -253,6 +263,8 @@ class PCAPredictors(Predictor):
                 top_corr_per_season[i] = get_top_corr(month_corr, top_n)
                 df_top_predictors = self.df_label_predictors[self.df_label_predictors.index.month==i][list(label_data.columns) + top_corr_per_season[i]]
                 self.experiments[self.num_experiments][i] = df_top_predictors
+            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, f"{self.rolling_window}{self.frequency}", label_methods
+                
 
         elif self.frequency=="yearly":
             pos_df, neg_df = build_pos_neg_corr_df(self.df_label_predictors, list(label_data.columns), methods=methods)
@@ -268,25 +280,36 @@ class PCAPredictors(Predictor):
 
             df_top_predictors = self.df_label_predictors[list(label_data.columns) + top_corr]
             self.experiments[self.num_experiments] = df_top_predictors
+            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, self.frequency, label_methods
+        
+        ## save data experiment for metadata
         
         self.num_experiments += 1
         return self.experiments[self.num_experiments-1], self.num_experiments-1
     
-    def experiment_to_csv(self, experiment, folder_path, name):
+    def experiment_to_parquet(self, experiment, folder_path, metadata_path):
         dfs = self.experiments[experiment]
+        boxes, top_n, var_thresh, modes, freq, met = self.data_experiments[experiment]
+        id = str(uuid.uuid4())[:8]
         if self.frequency == "monthly":
             for season, df in dfs.items():
-                df.to_csv(f"{folder_path}/{name}_{season}.csv")
+                name = f"predictor_{id}_{season}.parquet"
+                df.to_parquet(f"{folder_path}/{name}")
+                with open(metadata_path, "a") as file:
+                    file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},{season},{met}\n")
         elif self.frequency=="yearly":
-            dfs.to_csv(f"{folder_path}/{name}.csv")
+            name = f"predictor_{id}.parquet"
+            dfs.to_parquet(f"{folder_path}/{name}")
+            with open(metadata_path, "a") as file:
+                file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},0,{met}\n")
         print("Saved")
         return
     
     def set_df_predictors(self):
         if self.frequency=="monthly":
-            df = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}-01-01"),pd.to_datetime(f"{self.end_year}-12-01"),freq=pd.offsets.MonthBegin(1)))
+            df = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}-01"),pd.to_datetime(f"{self.end_year}-12"),freq=pd.offsets.MonthBegin(1)))
         elif self.frequency=="yearly":
-            df = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}-01-01"),pd.to_datetime(f"{self.end_year}-01-01"),freq=pd.offsets.YearBegin(1)))
+            df = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}"),pd.to_datetime(f"{self.end_year}"),freq=pd.offsets.YearBegin(1)))
         for mode in range(self.num_modes):
             for num, pca in self.dict_predictors.items():
                 df[f"PC_{num}-Mode-{mode+1}"] = pca.get_index(mode+1, start_year=self.start_year, end_year=self.end_year)
