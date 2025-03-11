@@ -22,7 +22,7 @@ def highlight_positions(data, threshold, labels, above=True):
                         styles.iloc[row, col] = 'background-color: blue;'
     return styles
 
-def get_top_n_indices(df: pd.DataFrame, n: int = 3):
+def get_top_n_indices(df: pd.DataFrame, n: int, id, metric, stage):
     # Extract numeric columns (last 6 columns)
     float_df = df.iloc[:, 4:]
     
@@ -33,7 +33,7 @@ def get_top_n_indices(df: pd.DataFrame, n: int = 3):
     top_n = stacked.nlargest(n)
     
     # Convert index to row, column positions
-    indices = [(df.iloc[row, 0], df.iloc[row, 1], col, value) for (row, col), value in top_n.items()]
+    indices = [(id, df.iloc[row, 0], df.iloc[row, 1], col, stage, metric, value,  df.iloc[row, -1]) for (row, col), value in top_n.items()]
     
     return indices
 
@@ -171,7 +171,7 @@ class PredictionModel():
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
     
-    def cross_validate(self, cv=5):
+    def cross_validate(self, cv=10):
         X, y = self.data[self.features], self.data[self.labels]
         self.cv_score = cross_val_score(self.regressor, X, y, cv=cv, scoring='r2')
         self.cv_score_average = self.cv_score.mean()
@@ -182,8 +182,9 @@ class PredictionExperiment():
     One PredictionExperiment correspond to one id experiment. It contains multiple results inside only bc of different metrics 
     """
     
-    def __init__(self, data, labels, regressors, name_regressors, len_pred, frequency="bimonthly"):
+    def __init__(self, data, labels, regressors, name_regressors, len_pred, data_id, frequency="bimonthly"):
         self.seasons = data.keys()
+        self.data_id = data_id
         self.labels = labels
         self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
         self.len_pred = len_pred
@@ -209,7 +210,15 @@ class PredictionExperiment():
         else:
             return
     
-    def top_results(self, metric, top_n, stage="prediction"):
-        df_metric = self.results[self.results["Metric"]==metric]
-        top = pd.DataFrame(get_top_n_indices(df_metric, top_n), columns=["Model", "Season", "Index", "Value"])
+    def save_results(self, path):
+        df_to_save = self.results.copy()
+        df_to_save["ID_data"] = self.data_id
+        df_to_save.to_csv(path, mode="a", header=False, index=False)
+
+    
+    def top_results(self, metric, top_n, top_data_path=None, stage="prediction"):
+        df_metric = self.results[(self.results["Metric"]==metric)&(self.results["Stage"]==stage)]
+        top = pd.DataFrame(get_top_n_indices(df_metric, top_n, self.data_id, metric, stage), columns=["ID_exp", "Model", "Season", "Index", "Stage", "Metric", "Value", "Average"])
+        if top_data_path:
+            top.to_csv(top_data_path, mode="a", header=False, index=False)
         return top

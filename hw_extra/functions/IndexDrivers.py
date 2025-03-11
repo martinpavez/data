@@ -90,7 +90,7 @@ class Index():
     """
     Base class for different types of climate indices.
     """
-    def __init__(self, data: xr.Dataset):
+    def __init__(self, data: xr.Dataset, **kwargs):
         ##Time series value of index
         self.index = None 
         self.data = data

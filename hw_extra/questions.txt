@@ -1,0 +1,14 @@
+For 11/03:
+    - I see class for gridded datasets method "get_data(variable)" 
+    (https://github.com/weather-pred-org/heatwave-prediction/blob/c15b9c0ff633672995ed0db3c0e8b1c0c0594208/notebooks/tutorials/05_load_gridded_data_v0.1.ipynb)
+      Does this return directly the xarray data? can you load more than one variable at same call?
+    
+    - I suppose ENSO Indices calculation would be in drivers folder, but i see in processing/kedro/meteochile methods like "intermediate_to_primary", 
+      should this only be for data transformation i.e. hourly to monthly? or the full process? (ofc in a new era5 source folder)
+
+    - ENSO Indices are for sst, should i do an index independently from which variable? or only for sst?
+
+
+
+  Indices de bloqueo/migratorios??
+  

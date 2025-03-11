@@ -316,8 +316,35 @@ class PCAPredictors(Predictor):
         df.index.name = "Date"
         return df
     
+    def parquet_to_experiment(self, uid, folder_path, metadata_path):
+        metadata = pd.read_csv(metadata_path)
+        exp = metadata[metadata["id"]==uid]
+        if len(list(exp["id"].index)) != 1:
+            self.experiments[self.num_experiments] = {}
+            flatten_values = list(exp.iloc[0].values.flatten())
+            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8]
+            for index, row in exp.iterrows():
+                season = row["season"]
+                self.experiments[self.num_experiments][int(season)] = pd.read_parquet(f"{folder_path}/predictor_{uid}_{season}.parquet")
+            
+            display(self.experiments[self.num_experiments][2])
+            self.num_experiments += 1
+            return self.experiments[self.num_experiments-1], self.num_experiments-1
+        else:
+            flatten_values = list(exp.values.flatten())
+            #construct self.experiment and self.dataexp with self.numexp
+            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8]
+            self.experiments[self.num_experiments] = pd.read_parquet(f"{folder_path}/predictor_{uid}.parquet")
+
+            self.num_experiments += 1
+            return self.experiments[self.num_experiments-1], self.num_experiments-1
+        
+        
+    
     def incorporate_predictor(self, predictor, name, format="NOAA"):
         self.df_predictors[name] = predictor
+        #incorporate new pred and that's new experiment
+        # so we can use save experiment independetely after incorporating (from client)
 
     def default_boxes(self):
         boxes0 = {

@@ -4,3 +4,18 @@ TASKS by 02/17:
 - Complete classes for yearly frequency (features and predictions)
 - Use t2m data for using land boxes
 - Gather best results for prediction (specially Cross Validated)
+
+
+- Use latitude as feature (max presssure in the region)
+- Incorporate ENSO indices / Ocean indices to see model performance
+
+Experiments:
+- Reproduce again using CV=10, this is coherent to predict 5 years
+- Include CV MAPE metric
+- Explore other metrics, feature selections.
+
+
+Github:
+- Check ENSO indices and build the integration into the github 
+- ENSO is: Clean data (download missing) (01 to 02 kedro), hourly to monthly (02 to 03), apply parameters (static/sliding climatology, how much rolling?, std??)
+
