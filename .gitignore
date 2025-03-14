@@ -2,3 +2,5 @@
 *.parquet
 *.xlsx
 *.pkl
+/hw_extra/hugo/*
+/hw_extra/data/local_data/*
