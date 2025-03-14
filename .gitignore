@@ -1,5 +1,4 @@
 *.nc
-*.csv
 *.parquet
 *.xlsx
 *.pkl
