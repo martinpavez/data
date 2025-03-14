@@ -5,6 +5,7 @@ from sklearn.multioutput import MultiOutputRegressor
 
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 ### UTILS
 
@@ -48,9 +49,11 @@ class PredictionModel():
         
         if len(self.labels) > 1:
             self.regressor = MultiOutputRegressor(regressor)
+            
         else:
             self.regressor = regressor
         self.name_regressor = name_regressor
+        self.cv_regressor = regressor
 
     def form_matrix(self, data):
         #data['Date'] = pd.to_datetime(data['Date'])
@@ -153,8 +156,6 @@ class PredictionModel():
         plt.show()
     
     def get_metric(self, metric, stage="prediction"):
-        if metric == "cv_r2":
-            return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_score) + [self.cv_score_average]
         if stage == "prediction":
             if metric == "r2":
                 return [self.name_regressor, self.season, metric, stage] + list(self.r2_pred) + [self.r2_average_pred]
@@ -170,11 +171,23 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, stage] + list(self.mae_training)+ [self.mae_average_training]
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
+        elif stage=="CV":
+            if metric=="r2":
+                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_r2_score) + [self.cv_r2_score_average]
+            elif metric == "mape":
+                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mape_score) + [self.cv_mape_score_average]
     
     def cross_validate(self, cv=10):
-        X, y = self.data[self.features], self.data[self.labels]
-        self.cv_score = cross_val_score(self.regressor, X, y, cv=cv, scoring='r2')
-        self.cv_score_average = self.cv_score.mean()
+        r2_cv = []
+        mape_cv = []
+        for label in self.labels:
+            X, y = self.data[self.features], self.data[label]
+            r2_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='r2').mean())
+            mape_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_percentage_error').mean())
+        self.cv_r2_score = r2_cv
+        self.cv_r2_score_average = np.mean(self.cv_r2_score)
+        self.cv_mape_score = mape_cv
+        self.cv_mape_score_average = np.mean(self.cv_mape_score)
 
 
 class PredictionExperiment():

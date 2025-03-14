@@ -19,3 +19,22 @@ Github:
 - Check ENSO indices and build the integration into the github 
 - ENSO is: Clean data (download missing) (01 to 02 kedro), hourly to monthly (02 to 03), apply parameters (static/sliding climatology, how much rolling?, std??)
 
+
+Tasks 03/12:
+- Preprocess indices (MEI, PDO, Nino3.4, Nino1+2, ???) to be incorporated then use combinations of these indices for each already constructed predictor -> predict and measure every experiment (to measure MAPE-CV and correct CVR^2 with CV=10)
+- Check R^2 for a 12 seasons assemblied machine (basically join the predictions and measure r^2)
+
+
+
+Reu 03/13:
+- Usar enso1+2, pdo, 3+4, indian ocean dipole index 
+- Buscar maxima de SP en el oceano del mes, sacarle ese maximo, longitud y latitud
+- Anticiclon (baja presion) es dnd hay HW ("buen clima")
+- Caja chile sur (PM - Patagonia), ver el bloqueo de los vientos en base a anomalia de presión superficial 
+- Chile central anomalia vientos U hacia el oeste, caja 30 a 37 
+- Calcular adveccion con vientos U y temperatura, todos a 850 (todo el pacifico sur y aparte una vertical al oeste de chile/cali)
+
+- Usar climatologia 1972,2022
+
+- California es analogo
+

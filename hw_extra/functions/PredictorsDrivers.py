@@ -238,6 +238,12 @@ class PCAPredictors(Predictor):
             label_methods = "p"
         else:
             label_methods = "s"
+        
+        extra_indices = None
+        if "SST" in self.variables:
+            only_sea = True
+        else:
+            only_sea = False
 
         if self.frequency=="monthly":
             self.experiments[self.num_experiments] = {}
@@ -263,7 +269,7 @@ class PCAPredictors(Predictor):
                 top_corr_per_season[i] = get_top_corr(month_corr, top_n)
                 df_top_predictors = self.df_label_predictors[self.df_label_predictors.index.month==i][list(label_data.columns) + top_corr_per_season[i]]
                 self.experiments[self.num_experiments][i] = df_top_predictors
-            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, f"{self.rolling_window}{self.frequency}", label_methods
+            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, f"{self.rolling_window}{self.frequency}", label_methods, extra_indices, only_sea
                 
 
         elif self.frequency=="yearly":
@@ -280,7 +286,7 @@ class PCAPredictors(Predictor):
 
             df_top_predictors = self.df_label_predictors[list(label_data.columns) + top_corr]
             self.experiments[self.num_experiments] = df_top_predictors
-            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, self.frequency, label_methods
+            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, self.frequency, label_methods, extra_indices, only_sea
         
         ## save data experiment for metadata
         
@@ -289,19 +295,19 @@ class PCAPredictors(Predictor):
     
     def experiment_to_parquet(self, experiment, folder_path, metadata_path):
         dfs = self.experiments[experiment]
-        boxes, top_n, var_thresh, modes, freq, met = self.data_experiments[experiment]
+        boxes, top_n, var_thresh, modes, freq, met, extra, sea = self.data_experiments[experiment]
         id = str(uuid.uuid4())[:8]
         if self.frequency == "monthly":
             for season, df in dfs.items():
                 name = f"predictor_{id}_{season}.parquet"
                 df.to_parquet(f"{folder_path}/{name}")
                 with open(metadata_path, "a") as file:
-                    file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},{season},{met}\n")
+                    file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},{season},{met},{extra},{sea}\n")
         elif self.frequency=="yearly":
             name = f"predictor_{id}.parquet"
             dfs.to_parquet(f"{folder_path}/{name}")
             with open(metadata_path, "a") as file:
-                file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},0,{met}\n")
+                file.write(f"{id},{name},{boxes},{top_n},{var_thresh},{modes},{freq},0,{met},{extra},{sea}\n")
         print("Saved")
         return
     
@@ -316,35 +322,56 @@ class PCAPredictors(Predictor):
         df.index.name = "Date"
         return df
     
-    def parquet_to_experiment(self, uid, folder_path, metadata_path):
-        metadata = pd.read_csv(metadata_path)
+    def parquet_to_experiment(self, uid, folder_path, metadata):
         exp = metadata[metadata["id"]==uid]
-        if len(list(exp["id"].index)) != 1:
+        if self.frequency=="monthly":
             self.experiments[self.num_experiments] = {}
             flatten_values = list(exp.iloc[0].values.flatten())
-            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8]
+            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]
             for index, row in exp.iterrows():
                 season = row["season"]
                 self.experiments[self.num_experiments][int(season)] = pd.read_parquet(f"{folder_path}/predictor_{uid}_{season}.parquet")
-            
-            display(self.experiments[self.num_experiments][2])
             self.num_experiments += 1
             return self.experiments[self.num_experiments-1], self.num_experiments-1
-        else:
+        elif self.frequency=="yearly":
             flatten_values = list(exp.values.flatten())
             #construct self.experiment and self.dataexp with self.numexp
-            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8]
+            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]
             self.experiments[self.num_experiments] = pd.read_parquet(f"{folder_path}/predictor_{uid}.parquet")
 
             self.num_experiments += 1
             return self.experiments[self.num_experiments-1], self.num_experiments-1
         
-        
+    def load_experiments(self, folder_path, metadata_path):
+        metadata = pd.read_csv(metadata_path)
+        if self.frequency=="monthly":
+            unique_ids = metadata[metadata["frequency"]==f"{self.rolling_window}{self.frequency}"]["id"].unique()
+        else:
+            unique_ids = metadata[metadata["frequency"]==f"{self.frequency}"]["id"].unique()
+        for id in unique_ids:
+            self.parquet_to_experiment(id, folder_path, metadata)
+        print("Loaded",len(list(self.experiments.keys())), "experiments")
     
-    def incorporate_predictor(self, predictor, name, format="NOAA"):
-        self.df_predictors[name] = predictor
-        #incorporate new pred and that's new experiment
-        # so we can use save experiment independetely after incorporating (from client)
+    
+    def incorporate_predictor(self, num_exp, predictors, names):
+        '''
+        Takes number of experiment and incorporates the new predictor into a new experiment with data + new predictors
+        '''
+        experiment = self.experiments[num_exp]
+        boxes, top_n, threshold_variance, num_modes, freq, label_methods, extra, sea = self.data_experiments[num_exp]
+        if self.frequency=="monthly":
+            new_exp = {}
+            for season, df in experiment.items():
+                df_new = df.copy()
+                for name, predictor in zip(names, predictors):
+                    df_new[name] = predictor
+                new_exp[season] = df_new
+        self.data_experiments[self.num_experiments] = boxes, top_n, threshold_variance, num_modes, freq, label_methods, "-".join(names), sea
+        self.experiments[self.num_experiments] = new_exp
+
+        self.num_experiments += 1
+        return self.experiments[self.num_experiments-1], self.num_experiments-1 # CHECK IF SAVE IS CORRECT AFTER INCORPORATING (save from outside)
+
 
     def default_boxes(self):
         boxes0 = {

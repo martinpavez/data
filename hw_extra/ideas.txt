@@ -1,0 +1,27 @@
+Ideas for HWs:
+
+- The IF has been shown to be efficient for detecting causality in linear and non-linear systems
+- Normalized IF:  In order to assess the relative importance of an identified causality
+
+- First, we test for multicollinearity to reduce the redundancy contained in the pool of potential predictors.
+  The absolute values of pair-wise correlations are considered. If two variables have a high correlation, the function looks at the mean absolute correlation of each of the two variables with all the other variables and removes the variable with the largest mean absolute correlation. 
+  The cutoff is fixed at 0.8.
+
+- Feature Selection: 
+
+I. Boruta Method:
+
+  Create copies of the original features by randomly shuffling the features(Shadow Features).
+
+  Concatenate these shadow features to the original dataset.
+  2. Train this new dataset using the Random Forest Classifier.
+
+  3. Check feature importance for the highest-rated Shadow feature.
+
+  4. All original features that are more important than the most important shadow feature are the ones that we want to keep.
+
+  5. Repeat 3 and 4 for some iterations (20 is a reasonable number) and keep track of the features that appear as important in every iteration.
+
+  6. Use binomial distribution to finalize which features provide enough confidence to be kept in the final list.
+
+II. GJO??
