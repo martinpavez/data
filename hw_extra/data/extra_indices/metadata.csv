@@ -1,0 +1,6 @@
+id,filename,method,rolling,variables,boxes,reference_period,target_period
+PDO,pdo.dat,EOF,1,SSTAnom,110|260|20|70,unknown,1972-2022
+ONI,oni.txt,Anom,3,SST,190|240|-5|5,30yearsliding,1972-2022
+SAM,sam.txt,DifAnom,1,SLP,X|X|-65|-40,1981-2010,1972-2022
+DMI,dmi.data,Grad,1,SSTAnom,50|70|-10|10;90|110|-10|0,1991-2020,1972-2022
+ADV,-,ADVU,1,U|T,282|288|-42|-26,NoRef,1972-2022

@@ -6,6 +6,8 @@ from sklearn.preprocessing import MinMaxScaler
 import scipy as sp
 import matplotlib.cm as cm  # For colormap
 import matplotlib.colors as mcolors  # For normalization
+import uuid
+
 
 # Doing design according to functionalities applied to a dataset,
 # but another design could be heritance from a xr.Dataset class and 
@@ -84,22 +86,229 @@ def detrend_data(matrix):
     
     return detrended_matrix
 
+def calculate_anomalies(data, climatology_period, box=None):
+    data_reference = data.sel(time=slice(f"{climatology_period[0]}-01",f"{climatology_period[1]}-12"))
+    mean_reference = data_reference.groupby("time.month").mean(dim="time")
+    gb_season = data.groupby("time.month")
+    anomalies = gb_season - mean_reference
+    if box:
+        return anomalies.sel(longitude=slice(box[0], box[1]), latitude=slice(box[2], box[3]))
+    else:
+        return anomalies
+
+
 ## Index Definitions
 
 class Index():
     """
     Base class for different types of climate indices.
     """
-    def __init__(self, data: xr.Dataset, **kwargs):
+    def __init__(self, data: xr.Dataset, variables, box_limit, **kwargs):
         ##Time series value of index
         self.index = None 
-        self.data = data
+        self.data = data.sel(longitude=slice(box_limit[0], box_limit[1]), latitude=slice(box_limit[2],box_limit[3]))
+        self.variables = variables
+        self.box = box_limit
+        self.filter_variables()
     
     def calculate_index(self):
         pass
     
     def get_index(self):
         return self.index
+    
+    def filter_variables(self):
+        """
+        Filters the data according to the variables selected
+        """
+        self.data = self.data[[var.lower() for var in self.variables]]
+    
+class MaxIndex(Index):
+    def __init__(self,data, target_period,
+                  variables=["SST", "SP", "TTR", "U10", "V10"], box_limit=[100,290,-30,30],
+                    rolling_window=1, frequency="monthly", anomalies=True, climatology_period=[1980,2018]):
+        super().__init__(data, variables, box_limit)
+        if anomalies:
+            self.data = calculate_anomalies(self.data, climatology_period=climatology_period)
+        self.target_period = target_period
+        self.rolling_window = rolling_window
+        self.frequency = frequency
+        self.index_dfs = {}
+        if self.frequency=="monthly":
+            self.find_monthly_maximums()
+    
+    def find_monthly_maximums(self):
+        """
+        Find monthly maximums from an xarray Dataset along with their positions.
+        
+        Parameters:
+        -----------
+        ds : xarray.Dataset
+            The input dataset with gridded data
+        variable_name : str
+            Name of the variable in the dataset to find maximums for
+        
+        Returns:
+        --------
+        pandas.DataFrame
+            DataFrame with columns for maximum values and their positions
+        """
+        for variable_name in self.variables:
+            if variable_name not in self.variables:
+                raise ValueError(f"Variable '{variable_name}' not found in dataset")
+            
+            da = self.data[variable_name.lower()].sel(time=slice(f"{self.target_period[0]}-01",f"{self.target_period[1]}-12"))
+            time_dim = [dim for dim in da.dims if dim.lower() in ['time', 't']][0]
+            lat_dim = [dim for dim in da.dims if dim.lower() in ['latitude', 'lat', 'y']][0]
+            lon_dim = [dim for dim in da.dims if dim.lower() in ['longitude', 'lon', 'x']][0]
+            
+            max_values = []
+            max_lats = []
+            max_lons = []
+            timestamps = []
+            
+            for t in da[time_dim]:
+                time_data = da.sel({time_dim: t})
+                
+                max_value = time_data.max().item()
+                
+                max_indices = np.unravel_index(time_data.argmax(), time_data.shape)
+                
+                max_lat = time_data[lat_dim].values[max_indices[0]].item()
+                max_lon = time_data[lon_dim].values[max_indices[1]].item()
+                
+                max_values.append(max_value)
+                max_lats.append(max_lat)
+                max_lons.append(max_lon)
+                timestamps.append(t.values)
+            
+            # Create DataFrame
+            df = pd.DataFrame({
+                'max_value': max_values,
+                'latitude': max_lats,
+                'longitude': max_lons
+            },  index=pd.DatetimeIndex(timestamps, name='Date'))
+            
+            self.index_dfs[variable_name] = df
+    
+    def get_index_by_variable(self, var, start_year=1972, end_year=2022):
+        """
+        Retrieves the full index.
+        """
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+        else:
+            df = self.index_dfs[var]
+            df.index = df.index.to_numpy().astype('datetime64[M]')
+            df.index.name="Date"
+            return df[(df.index.year >= start_year) & (df.index.year <= end_year)]
+    
+    def index_df_to_parquet(self, var, folder_path, metadata_path, start_year=1972, end_year=2022):
+        target_index = self.index_dfs[var]
+        id = str(uuid.uuid4())[:8] 
+        target_index.to_parquet(f"{folder_path}/index_{id}.parquet")
+        with open(metadata_path, "a") as file:
+            box_string = "|".join(list(map(str, self.box)))
+            ref_string = "NoRef"
+            target_string = "-".join(list(map(str, self.target_period)))
+            file.write(f"{id},index_{id}.parquet,max,{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
+        print("Saved")
+        return id
+        
+
+class AnomaliesIndex(Index):
+    def __init__(self, data: xr.Dataset, target_period, reference_period=[1972,2022],
+                  variables=["SST", "SP", "TTR", "U10", "V10"], box_limit=[100,290,-30,30],
+                    rolling_window=2, frequency="monthly", index_name=''):
+        
+        super().__init__(data, variables, box_limit)
+
+        self.climatology_period = reference_period
+        self.target_period = target_period
+        self.variables =variables
+        self.rolling_window = rolling_window
+        self.frequency = frequency
+
+        if self.frequency=="monthly":
+            self.index = self.calculate_index_monthly()
+
+        
+    def calculate_index_monthly(self):
+        data_reference = self.data.sel(time=slice(f"{self.climatology_period[0]}-01",f"{self.climatology_period[1]}-12"))
+        mean_reference = data_reference.mean(dim=["longitude","latitude"]).groupby("time.month").mean(dim="time")
+        gb_season = self.data.mean(dim=["longitude","latitude"]).groupby("time.month")
+        anomalies = gb_season - mean_reference
+        if self.rolling_window > 1:
+            return anomalies.rolling(time=self.rolling_window, center=True).mean()
+        else:
+            return anomalies
+    
+
+    def get_index(self, start_year=1972, end_year=2022, as_df=True):
+        """
+        Retrieves the full index.
+        """
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+        else:
+            return self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
+        
+    def get_index_by_variable(self, var, as_df=True, start_year=1972, end_year=2022):
+        """
+        Retrieves the full index.
+        """
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+        else:
+            if not as_df:
+                return self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))[[var.lower()]]
+            else:
+                df = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))[[var.lower()]].to_dataframe()
+                df.index.name="Date"
+                df.drop(columns="month", inplace=True)
+                df.index = df.index.to_numpy().astype('datetime64[M]') ## Set the index as first day of the month
+                df.index.name="Date"
+                return df
+    
+    def get_index_by_season(self, season, as_df=True, start_year=1972, end_year=2022):
+        """
+        Retrieves the full index by season.
+        """
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+        else:
+            target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
+            if not as_df:
+                return target_index.sel(time=is_month(target_index['time.month'], season))
+            else:
+                return target_index.sel(time=is_month(target_index['time.month'], season)).to_dataframe()
+    
+    def get_index_by_variable_season(self, season, var, as_df=True, start_year=1972, end_year=2022):
+        """
+        Retrieves the full index by season.
+        """
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+        else:
+            target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
+            if not as_df:
+                return target_index.sel(time=is_month(target_index['time.month'], season))[[var.lower()]]   
+            else:
+                return target_index.sel(time=is_month(target_index['time.month'], season))[[var.lower()]].to_dataframe()
+    
+    def index_df_to_parquet(self, var, folder_path, metadata_path, start_year=1972, end_year=2022):
+        target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
+        id = str(uuid.uuid4())[:8]
+        target_index[[var.lower()]].to_dataframe().to_parquet(f"{folder_path}/index_{id}.parquet")
+        with open(metadata_path, "a") as file:
+            box_string = "|".join(list(map(str, self.box)))
+            ref_string = "-".join(list(map(str, self.climatology_period)))
+            target_string = "-".join(list(map(str, self.target_period)))
+            file.write(f"{id},index_{id}.parquet,anom,{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
+        print("Saved")
+        return id
+
+
     
 class MultivariatePCA(Index):
     """
@@ -156,7 +365,7 @@ class MultivariatePCA(Index):
 
         self.correct_pca()
         
-        self.get_full_index()
+        self.compile_full_index()
 
     def calculate_index_yearly(self):
         yearly = self.data.groupby('time.year').mean('time')
@@ -191,7 +400,7 @@ class MultivariatePCA(Index):
         self.explained_variance = D / np.trace(cov_matrix)
         self.modes = self.map_modes_to_full_grid(np.array(modes), valid_columns)
 
-        self.get_full_index_yearly()
+        self.compile_full_index_yearly()
     
     def correct_pca(self):
         """
@@ -322,7 +531,7 @@ class MultivariatePCA(Index):
             fig.suptitle(f"{i+1}-Mode for Season {season}", fontsize=16)
             plt.show()
     
-    def get_full_index(self):
+    def compile_full_index(self):
         """
         Compile the full index.
         """
@@ -334,7 +543,7 @@ class MultivariatePCA(Index):
                     aux_index.append(self.pcs[f"{k}"][mod][i])
             self.index[f"PC-{mod+1}"] = np.array(aux_index)
     
-    def get_full_index_yearly(self):
+    def compile_full_index_yearly(self):
         """
         Compile the full index.
         """

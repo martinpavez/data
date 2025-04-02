@@ -1,0 +1,12 @@
+Github:
+- Check ENSO indices and build the integration into the github 
+- ENSO is: Clean data (download missing) (01 to 02 kedro), hourly to monthly (02 to 03), apply parameters (static/sliding climatology, how much rolling?, std??)
+
+
+Tasks now to include raw indices calculation for ENSO. 
+
+Every gridded data should be same format before calculating an index (as )
+
+fix connection for windows:
+- serverside define functions in unix format
+- clientisde see if function calls local paths, to use local os

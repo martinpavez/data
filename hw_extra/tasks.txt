@@ -15,10 +15,6 @@ Experiments:
 - Explore other metrics, feature selections.
 
 
-Github:
-- Check ENSO indices and build the integration into the github 
-- ENSO is: Clean data (download missing) (01 to 02 kedro), hourly to monthly (02 to 03), apply parameters (static/sliding climatology, how much rolling?, std??)
-
 
 Tasks 03/12:
 - Preprocess indices (MEI, PDO, Nino3.4, Nino1+2, ???) to be incorporated then use combinations of these indices for each already constructed predictor -> predict and measure every experiment (to measure MAPE-CV and correct CVR^2 with CV=10)
@@ -28,13 +24,41 @@ Tasks 03/12:
 
 Reu 03/13:
 - Usar enso1+2, pdo, 3+4, indian ocean dipole index 
-- Buscar maxima de SP en el oceano del mes, sacarle ese maximo, longitud y latitud
+- Buscar maxima de SP en el oceano del mes, sacarle ese maximo, longitud y latitud, check box
 - Anticiclon (baja presion) es dnd hay HW ("buen clima")
 - Caja chile sur (PM - Patagonia), ver el bloqueo de los vientos en base a anomalia de presión superficial 
 - Chile central anomalia vientos U hacia el oeste, caja 30 a 37 
-- Calcular adveccion con vientos U y temperatura, todos a 850 (todo el pacifico sur y aparte una vertical al oeste de chile/cali)
+- Calcular adveccion con vientos U y temperatura, todos a 850 (todo el pacifico sur y aparte una vertical al oeste y otra al este de chile/cali)
 
-- Usar climatologia 1972,2022
+- Usar climatologia equivalente a HW detrection: Meteochile 1981-2010
 
 - California es analogo
+
+Add for poster:
+Construct a 12 season ensembled model (with best model in validation), then test the model in 2023 (or 1971, any unseen data).
+
+Download: 
+- U,V,T at 850hpa
+- MSLP
+
+
+Reu Victoria 24/03:
+
+- comparar vientos 10m con 850hpa para ver raco
+- separar cajas de mar a cordillera de la costa y de cordillera a cordillera, esto para ver raco/puelche (vientos U10 U850)
+- para presiones tan bien las cajas, ideal dejarla hasta cordillera (para chile)
+- para advección, descartar lado argentino, desde el oceano y parte de chile (282 a 288/chile), y de alto paralela a la zona o mas norte incluso. Ver adveccion horizontal y vientos en esa misma caja.
+- (a futuro ver IVT para medir rio)
+- alta pacifico MSL verla como una sola de chile N-S (se ve en la costa, oceano hasta cordillera costa)
+- altas migratorias mismas 3 cajas (oceano a arg) con Max anomalia MSL, sacando posicion
+
+todas son anomalias, menos los maximos.
+
+
+
+Tasks 31/03:
+- Implement bimonthly predictors
+- Implement incorporation of predictor by shifting -1,-2 (either biseasonly or yearly shifting)
+- Check correlation between climate variables
+
 

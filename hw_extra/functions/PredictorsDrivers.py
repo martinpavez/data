@@ -152,14 +152,100 @@ def get_top_corr(all_corr_df, top_n):
 ### PREDICTORS FUNCTIONS
 
 class Predictor():
-    def __init__(self):
-        pass
+    def __init__(self, start_year=1972, end_year=2022, frequency="monthly"):
+        self.experiments = {}
+        self.data_experiments = {}
+        self.num_experiments = 0
+        self.frequency = frequency
+        self.start_year = start_year
+        self.end_year = end_year
 
     def calculate_predictors(self):
         pass
 
     def get_predictors(self):
         pass
+
+    def create_empty_experiment(self):
+        if self.frequency=="monthly":
+            df = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}-01"),pd.to_datetime(f"{self.end_year}-12"),freq=pd.offsets.MonthBegin(1)))
+            df.index.name = "Date"
+            dfs = {i: df[df.index.month==i] for i in range(1,13)}
+        elif self.frequency=="yearly":
+            dfs = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}"),pd.to_datetime(f"{self.end_year}"),freq=pd.offsets.YearBegin(1)))
+            dfs.index.name = "Date"
+        self.experiments[self.num_experiments] = dfs
+        self.data_experiments[self.num_experiments] = list()
+        self.num_experiments += 1
+        return self.experiments[self.num_experiments-1], self.num_experiments-1
+
+    def incorporate_predictor(self, predictors, names, num_exp=0):
+        '''
+        Takes number of experiment and incorporates the new predictor into a new experiment with data + new predictors
+        '''
+        try:
+            experiment = self.experiments[num_exp]
+            data = self.data_experiments[num_exp]
+        except KeyError:
+            experiment, num = self.create_empty_experiment()
+            data = self.data_experiments[num]
+        if self.frequency=="monthly":
+            new_exp = {}
+            for season, df in experiment.items():
+                df_new = df.copy()
+                for name, predictor in zip(names, predictors):
+                    for col in list(predictor.columns):
+                        df_new[f"{name}-{col}"] = predictor[col]
+                new_exp[season] = df_new
+        self.data_experiments[self.num_experiments] = data + ["-".join(names)]
+        self.experiments[self.num_experiments] = new_exp
+
+        self.num_experiments += 1
+        return self.experiments[self.num_experiments-1], self.num_experiments-1 
+    
+    def incorporate_label(self, df_labels, num_exp=0):
+        '''
+        Takes number of experiment and incorporates the new predictor into a new experiment with data + new predictors
+        '''
+        try:
+            experiment = self.experiments[num_exp]
+            data = self.data_experiments[num_exp]
+        except KeyError:
+            experiment, num = self.create_empty_experiment()
+            data = self.data_experiments[num]
+        if self.frequency=="monthly":
+            new_exp = {}
+            for season, df in experiment.items():
+                df_new = df.copy()
+                for col in list(df_labels.columns):
+                    df_new[col] = df_labels[col]
+                new_exp[season] = df_new
+        self.data_experiments[self.num_experiments] = data 
+        self.experiments[self.num_experiments] = new_exp
+
+        self.num_experiments += 1
+        return self.experiments[self.num_experiments-1], self.num_experiments-1 
+
+    def experiment_to_parquet(self, experiment, folder_path, metadata_path):
+        dfs = self.experiments[experiment]
+        data = self.data_experiments[experiment]
+        data_string = ",".join(data)
+        id = str(uuid.uuid4())[:8]
+        if self.frequency == "monthly":
+            for season, df in dfs.items():
+                name = f"predictor_{id}_{season}.parquet"
+                df.to_parquet(f"{folder_path}/{name}")
+                with open(metadata_path, "a") as file:
+                    file.write(f"{id},{name},{season},{data_string}\n")
+        elif self.frequency=="yearly":
+            name = f"predictor_{id}.parquet"
+            dfs.to_parquet(f"{folder_path}/{name}")
+            with open(metadata_path, "a") as file:
+                file.write(f"{id},{name},0,{data_string}\n")
+        print("Saved")
+        return
+    
+
 
 
 class PCAPredictors(Predictor):
@@ -269,7 +355,7 @@ class PCAPredictors(Predictor):
                 top_corr_per_season[i] = get_top_corr(month_corr, top_n)
                 df_top_predictors = self.df_label_predictors[self.df_label_predictors.index.month==i][list(label_data.columns) + top_corr_per_season[i]]
                 self.experiments[self.num_experiments][i] = df_top_predictors
-            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, f"{self.rolling_window}{self.frequency}", label_methods, extra_indices, only_sea
+            self.data_experiments[self.num_experiments] = [self.boxes_id, top_n, threshold_variance, self.num_modes, f"{self.rolling_window}{self.frequency}", label_methods, extra_indices, only_sea]
                 
 
         elif self.frequency=="yearly":
@@ -286,7 +372,7 @@ class PCAPredictors(Predictor):
 
             df_top_predictors = self.df_label_predictors[list(label_data.columns) + top_corr]
             self.experiments[self.num_experiments] = df_top_predictors
-            self.data_experiments[self.num_experiments] = self.boxes_id, top_n, threshold_variance, self.num_modes, self.frequency, label_methods, extra_indices, only_sea
+            self.data_experiments[self.num_experiments] = [self.boxes_id, top_n, threshold_variance, self.num_modes, self.frequency, label_methods, extra_indices, only_sea]
         
         ## save data experiment for metadata
         
@@ -327,7 +413,7 @@ class PCAPredictors(Predictor):
         if self.frequency=="monthly":
             self.experiments[self.num_experiments] = {}
             flatten_values = list(exp.iloc[0].values.flatten())
-            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]
+            self.data_experiments[self.num_experiments] = [flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]]
             for index, row in exp.iterrows():
                 season = row["season"]
                 self.experiments[self.num_experiments][int(season)] = pd.read_parquet(f"{folder_path}/predictor_{uid}_{season}.parquet")
@@ -336,7 +422,7 @@ class PCAPredictors(Predictor):
         elif self.frequency=="yearly":
             flatten_values = list(exp.values.flatten())
             #construct self.experiment and self.dataexp with self.numexp
-            self.data_experiments[self.num_experiments] = flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]
+            self.data_experiments[self.num_experiments] = [flatten_values[2], flatten_values[3], flatten_values[4], flatten_values[5], flatten_values[6], flatten_values[8], flatten_values[9], flatten_values[10]]
             self.experiments[self.num_experiments] = pd.read_parquet(f"{folder_path}/predictor_{uid}.parquet")
 
             self.num_experiments += 1
@@ -366,7 +452,7 @@ class PCAPredictors(Predictor):
                 for name, predictor in zip(names, predictors):
                     df_new[name] = predictor
                 new_exp[season] = df_new
-        self.data_experiments[self.num_experiments] = boxes, top_n, threshold_variance, num_modes, freq, label_methods, "-".join(names), sea
+        self.data_experiments[self.num_experiments] = [boxes, top_n, threshold_variance, num_modes, freq, label_methods, "-".join(names), sea]
         self.experiments[self.num_experiments] = new_exp
 
         self.num_experiments += 1
