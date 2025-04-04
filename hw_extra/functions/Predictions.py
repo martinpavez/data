@@ -10,6 +10,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
+from xgboost import plot_importance
+
+from warnings import simplefilter
+from sklearn.exceptions import ConvergenceWarning
+simplefilter("ignore", category=ConvergenceWarning)
+
+
 ### UTILS
 
 def get_info_experiment(id_data, metadata_exp_path, metadata_index_path, extra_indices_path):
@@ -373,6 +380,12 @@ class PredictionModel():
     def svm_importance(self):
         if len(self.labels) == 1 and "SV" in self.name_regressor:
             pd.Series(abs(self.regressor.coef_[0]), index=self.features.to_list()).plot(kind='barh')
+    
+    def xgb_importance(self, type='gain'):
+        fig, ax = plt.subplots(figsize=(15,8))
+        plot_importance(self.regressor, ax=ax, importance_type=type)
+        ax.set_title(f"Feature importances ({type}) on model {self.name_regressor} for season {self.season}")
+        plt.show()
 
 
  
@@ -392,7 +405,6 @@ class PredictionExperiment():
         self.num_results = 0
         self.results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
         
-    
     def execute_experiment(self):
         for season, models in self.models.items():
             for model in models:
@@ -423,7 +435,7 @@ class PredictionExperiment():
             top.to_csv(top_data_path, mode="a", header=False, index=False)
         return top
     
-    def get_feature_importance(self, season, model, method="mdi"):
+    def get_feature_importance(self, season, model, method="mdi", xgbtype="gain"):
         for mod in self.models[season]:
             if mod.name_regressor == model:
                 if method=="mdi":
@@ -432,4 +444,6 @@ class PredictionExperiment():
                     mod.permutation_importance(self.len_pred)
                 elif method=="svm":
                     mod.svm_importance()
+                elif method=="xgboost":
+                    mod.xgb_importance(xgbtype)
                 return

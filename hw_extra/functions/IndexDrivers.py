@@ -133,6 +133,7 @@ class MaxIndex(Index):
         self.target_period = target_period
         self.rolling_window = rolling_window
         self.frequency = frequency
+        self.method_string = "max"
         self.index_dfs = {}
         if self.frequency=="monthly":
             self.find_monthly_maximums()
@@ -203,16 +204,38 @@ class MaxIndex(Index):
             df.index.name="Date"
             return df[(df.index.year >= start_year) & (df.index.year <= end_year)]
     
-    def index_df_to_parquet(self, var, folder_path, metadata_path, start_year=1972, end_year=2022):
+    def index_df_to_parquet(self, var, folder_path, metadata_path):
         target_index = self.index_dfs[var]
-        id = str(uuid.uuid4())[:8] 
-        target_index.to_parquet(f"{folder_path}/index_{id}.parquet")
-        with open(metadata_path, "a") as file:
-            box_string = "|".join(list(map(str, self.box)))
-            ref_string = "NoRef"
-            target_string = "-".join(list(map(str, self.target_period)))
-            file.write(f"{id},index_{id}.parquet,max,{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
-        print("Saved")
+        id = self.search_id_index(var, metadata_path)
+        if id:
+            print(f"Found id in metadata: {id}")
+        else:
+            id = str(uuid.uuid4())[:8] 
+            target_index.to_parquet(f"{folder_path}/index_{id}.parquet")
+            with open(metadata_path, "a") as file:
+                box_string = "|".join(list(map(str, self.box)))
+                ref_string = "NoRef"
+                target_string = "-".join(list(map(str, self.target_period)))
+                file.write(f"{id},index_{id}.parquet,{self.method_string},{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
+            print("Saved")
+        return id
+    
+    def search_id_index(self, var, path):
+        rolling = self.rolling_window
+        box_string = "|".join(list(map(str, self.box)))
+        ref_string = "NoRef"
+        target_string = "-".join(list(map(str, self.target_period)))
+        meta_inds = pd.read_csv(path)
+        ids = meta_inds[(meta_inds["reference_period"]==ref_string) &
+                  (meta_inds["target_period"]==target_string) &
+                  (meta_inds["rolling"]==rolling) &
+                  (meta_inds["boxes"]==box_string) &
+                  (meta_inds["variables"]==var) &
+                  (meta_inds["method"]==self.method_string)]
+        try:
+            id = ids.iloc[-1]["id"]
+        except IndexError:
+            id = None
         return id
         
 
@@ -228,11 +251,29 @@ class AnomaliesIndex(Index):
         self.variables =variables
         self.rolling_window = rolling_window
         self.frequency = frequency
+        self.method_string = "anom"
 
         if self.frequency=="monthly":
             self.index = self.calculate_index_monthly()
 
-        
+    def search_id_index(self, var, path):
+        rolling = self.rolling_window
+        box_string = "|".join(list(map(str, self.box)))
+        ref_string = "-".join(list(map(str, self.climatology_period)))
+        target_string = "-".join(list(map(str, self.target_period)))
+        meta_inds = pd.read_csv(path)
+        ids = meta_inds[(meta_inds["reference_period"]==ref_string) &
+                  (meta_inds["target_period"]==target_string) &
+                  (meta_inds["rolling"]==rolling) &
+                  (meta_inds["boxes"]==box_string) &
+                  (meta_inds["variables"]==var) &
+                  (meta_inds["method"]==self.method_string)]
+        try:
+            id = ids.iloc[-1]["id"]
+        except IndexError:
+            id = None
+        return id
+    
     def calculate_index_monthly(self):
         data_reference = self.data.sel(time=slice(f"{self.climatology_period[0]}-01",f"{self.climatology_period[1]}-12"))
         mean_reference = data_reference.mean(dim=["longitude","latitude"]).groupby("time.month").mean(dim="time")
@@ -244,68 +285,72 @@ class AnomaliesIndex(Index):
             return anomalies
     
 
-    def get_index(self, start_year=1972, end_year=2022, as_df=True):
+    def get_index(self, var=None, season=None, as_df=True, start_year=1972, end_year=2022):
         """
-        Retrieves the full index.
-        """
-        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
-            print("Can not retrieve for not calculated years")
-        else:
-            return self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
+        Retrieves the index based on specified parameters.
         
-    def get_index_by_variable(self, var, as_df=True, start_year=1972, end_year=2022):
+        Parameters:
+        -----------
+        var : str, optional
+            Variable name to filter by. If None, all variables are returned.
+        season : str or list, optional
+            Season or list of months to filter by. If None, all months are returned.
+        as_df : bool, default=True
+            Whether to return the result as a pandas DataFrame. If False, returns as xarray.
+        start_year : int, default=1972
+            Start year for the query.
+        end_year : int, default=2022
+            End year for the query.
+            
+        Returns:
+        --------
+        xarray.Dataset or pandas.DataFrame
+            The requested index data.
         """
-        Retrieves the full index.
-        """
+        # Check if years are within calculated range
         if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
             print("Can not retrieve for not calculated years")
+            return None
+        
+        # Select the date range
+        target_index = self.index.sel(time=slice(f"{start_year}-01", f"{end_year}-12"))
+        
+        # Filter by season if specified
+        if season is not None:
+            target_index = target_index.sel(time=is_month(target_index['time.month'], season))
+        
+        # Filter by variable if specified
+        if var is not None:
+            target_index = target_index[[var.lower()]]
+        
+        # Return as DataFrame or xarray
+        if not as_df:
+            return target_index
         else:
-            if not as_df:
-                return self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))[[var.lower()]]
-            else:
-                df = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))[[var.lower()]].to_dataframe()
-                df.index.name="Date"
+            df = target_index.to_dataframe()
+            df.index.name = "Date"
+            
+            # Clean up dataframe if we have variable data
+            if var is not None:
                 df.drop(columns="month", inplace=True)
-                df.index = df.index.to_numpy().astype('datetime64[M]') ## Set the index as first day of the month
-                df.index.name="Date"
-                return df
+                df.index = df.index.to_numpy().astype('datetime64[M]')  # Set the index as first day of the month
+                df.index.name = "Date"
+            return df
     
-    def get_index_by_season(self, season, as_df=True, start_year=1972, end_year=2022):
-        """
-        Retrieves the full index by season.
-        """
-        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
-            print("Can not retrieve for not calculated years")
+    def index_df_to_parquet(self, var, folder_path, metadata_path):
+        target_index = self.index.sel(time=slice(f"{self.target_period[0]}-01",f"{self.target_period[1]}-12"))
+        id = self.search_id_index(var, metadata_path)
+        if id:
+            print(f"Found id in metadata: {id}")
         else:
-            target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
-            if not as_df:
-                return target_index.sel(time=is_month(target_index['time.month'], season))
-            else:
-                return target_index.sel(time=is_month(target_index['time.month'], season)).to_dataframe()
-    
-    def get_index_by_variable_season(self, season, var, as_df=True, start_year=1972, end_year=2022):
-        """
-        Retrieves the full index by season.
-        """
-        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
-            print("Can not retrieve for not calculated years")
-        else:
-            target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
-            if not as_df:
-                return target_index.sel(time=is_month(target_index['time.month'], season))[[var.lower()]]   
-            else:
-                return target_index.sel(time=is_month(target_index['time.month'], season))[[var.lower()]].to_dataframe()
-    
-    def index_df_to_parquet(self, var, folder_path, metadata_path, start_year=1972, end_year=2022):
-        target_index = self.index.sel(time=slice(f"{start_year}-01",f"{end_year}-12"))
-        id = str(uuid.uuid4())[:8]
-        target_index[[var.lower()]].to_dataframe().to_parquet(f"{folder_path}/index_{id}.parquet")
-        with open(metadata_path, "a") as file:
-            box_string = "|".join(list(map(str, self.box)))
-            ref_string = "-".join(list(map(str, self.climatology_period)))
-            target_string = "-".join(list(map(str, self.target_period)))
-            file.write(f"{id},index_{id}.parquet,anom,{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
-        print("Saved")
+            id = str(uuid.uuid4())[:8]
+            target_index[[var.lower()]].to_dataframe().to_parquet(f"{folder_path}/index_{id}.parquet")
+            with open(metadata_path, "a") as file:
+                box_string = "|".join(list(map(str, self.box)))
+                ref_string = "-".join(list(map(str, self.climatology_period)))
+                target_string = "-".join(list(map(str, self.target_period)))
+                file.write(f"{id},index_{id}.parquet,anom,{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
+            print("Saved")
         return id
 
 
