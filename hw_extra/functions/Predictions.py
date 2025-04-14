@@ -4,7 +4,9 @@ from sklearn.inspection import permutation_importance
 
 from sklearn.metrics import mean_absolute_error, r2_score, mean_absolute_percentage_error
 from sklearn.multioutput import MultiOutputRegressor
+from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import StandardScaler
+from tensorflow_addons.metrics import RSquare
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -162,9 +164,12 @@ class PredictionModel():
         self.labels = labels
         self.season = season
         self.name_regressor = name_regressor
+        
+        self.is_keras_model = hasattr(regressor, "fit") and hasattr(regressor, "predict") and hasattr(regressor, "compile")
         self.data, self.features = self.form_matrix(data)
-
-        if len(self.labels) > 1:
+        if self.is_keras_model:
+            self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+        if len(self.labels) > 1 and not self.is_keras_model:
             self.regressor = MultiOutputRegressor(regressor)
             
         else:
@@ -180,9 +185,20 @@ class PredictionModel():
         if "SVR" in self.name_regressor:
             scaler = StandardScaler().fit(data[features])
             data[features] = scaler.transform(data[features])
+        if self.is_keras_model:
+            # Standardize inputs
+            self.scaler_X = StandardScaler()
+            self.label_scaler = StandardScaler()
+
+            data[features] = self.scaler_X.fit_transform(data[features])
+            data[self.labels] = self.label_scaler.fit_transform(data[self.labels])
         
         return data, features
     
+    def reshape_for_keras(self, X):
+        return np.expand_dims(X, axis=1)
+    
+
     def train(self, len_pred):
         X = self.data[self.features]
         y = self.data[self.labels]
@@ -190,15 +206,25 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         
-        self.regressor.fit(X_train, y_train)
-        y_pred_train = self.regressor.predict(X_train)
+        
+        if self.is_keras_model:
+            X_train = self.reshape_for_keras(X_train)
+            X_test = self.reshape_for_keras(X_test)
+            self.regressor.compile(optimizer="adam", loss="mae")
+            self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+            y_pred_train = self.regressor.predict(X_train)
+        else:
+            self.regressor.fit(X_train, y_train)
+            y_pred_train = self.regressor.predict(X_train)
         self.mae_training = mean_absolute_error(y_train, y_pred_train, multioutput="raw_values")
         self.mape_training = mean_absolute_percentage_error(y_train, y_pred_train, multioutput="raw_values")
         self.r2_training = r2_score(y_train, y_pred_train, multioutput="raw_values")
         self.mae_average_training = mean_absolute_error(y_train, y_pred_train)
         self.mape_average_training = mean_absolute_percentage_error(y_train, y_pred_train)
         self.r2_average_training = r2_score(y_train, y_pred_train)
-        
+        if self.is_keras_model:
+            self.mae_training = self.mae_training * self.label_scaler.scale_
+            self.mae_average_training = self.mae_average_training * self.label_scaler.scale_
         return y_train, y_pred_train
 
     def predict(self, len_pred):
@@ -208,13 +234,20 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         
-        y_pred = self.regressor.predict(X_test)
+        if self.is_keras_model:
+            X_test = self.reshape_for_keras(X_test)
+            y_pred = self.regressor.predict(X_test)
+        else:
+            y_pred = self.regressor.predict(X_test)
         self.mae_pred = mean_absolute_error(y_test, y_pred, multioutput="raw_values")
         self.mape_pred = mean_absolute_percentage_error(y_test, y_pred, multioutput="raw_values")
         self.r2_pred = r2_score(y_test, y_pred, multioutput="raw_values")
         self.mae_average_pred = mean_absolute_error(y_test, y_pred)
         self.mape_average_pred = mean_absolute_percentage_error(y_test, y_pred)
         self.r2_average_pred = r2_score(y_test, y_pred)
+        if self.is_keras_model:
+            self.mae_pred = self.mae_pred * self.label_scaler.scale_
+            self.mae_average_pred = self.mae_average_pred * self.label_scaler.scale_
 
         
         return y_train, y_pred
@@ -222,7 +255,7 @@ class PredictionModel():
     def train_predict(self, len_pred, plot=False):
         ytrains, ypredtrains = self.train(len_pred)
         ytests, ypreds = self.predict(len_pred)
-        self.cross_validate()
+        # self.cross_validate()
         self.timeseries_cross_validate()
         if plot:
             self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
@@ -319,21 +352,39 @@ class PredictionModel():
         r2_tscv = []
         mape_tscv= []
         tscv = TimeSeriesSplit(test_size=5)
-        for label in self.labels:
-            X, y = self.data[self.features], self.data[label]
-            r2_tscv_label = []
-            mape_tscv_label = []
+        if not self.is_keras_model:
+            for label in self.labels:
+                X, y = self.data[self.features], self.data[label]
+                r2_tscv_label = []
+                mape_tscv_label = []
+                train_sizes = []
+                for train_index, test_index in tscv.split(X):
+                    train_sizes.append(len(train_index))
+                    train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+                    self.cv_regressor.fit(train_data, y_train)
+                    pred = self.cv_regressor.predict(test_data)
+                    r2_tscv_label.append(r2_score(y_test, pred))
+                    mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
+                weights = np.array(train_sizes)/np.sum(train_sizes)
+                r2_tscv.append(np.sum(weights*r2_tscv_label))
+                mape_tscv.append(np.sum(weights*mape_tscv_label))
+        else:
+            X, y = self.data[self.features], self.data[self.labels]
             train_sizes = []
             for train_index, test_index in tscv.split(X):
                 train_sizes.append(len(train_index))
                 train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
-                self.cv_regressor.fit(train_data, y_train)
-                pred = self.cv_regressor.predict(test_data)
-                r2_tscv_label.append(r2_score(y_test, pred))
-                mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
+                X_train = self.reshape_for_keras(train_data)
+                X_test = self.reshape_for_keras(test_data)
+                # self.regressor.compile(optimizer="adam", loss="mae")
+                self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+                pred = self.regressor.predict(X_test)
+                r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
+                mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
             weights = np.array(train_sizes)/np.sum(train_sizes)
-            r2_tscv.append(np.sum(weights*r2_tscv_label))
-            mape_tscv.append(np.sum(weights*mape_tscv_label))
+            r2_tscv = np.dot(np.array(r2_tscv).T,weights)
+            mape_tscv = np.dot(np.array(mape_tscv).T,weights)
+        
         self.tscv_r2_score = r2_tscv
         self.tscv_r2_score_average = np.mean(r2_tscv)
         self.tscv_mape_score = mape_tscv

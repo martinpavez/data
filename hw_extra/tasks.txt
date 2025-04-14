@@ -62,3 +62,10 @@ Tasks 31/03:
 - Check correlation between climate variables
 
 
+Tasks 09/04:
+- Check phenomenons and visualize them with our data, then set a representative point and repeat the timeseries proyection
+
+
+
+
+

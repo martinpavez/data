@@ -1,0 +1,21 @@
+c1c59e4d-u:
+    - Specs: anom	1	U	289|290.5|-34|-30
+    - Performance: Best feature in svr linear model (0.47 r^2) for December
+
+422ed1de-max-lat-lon:
+    - Specs: max	1	MSL	282|292|-38|-34	
+    - Performance: 2nd best 0.47 r^2 SVR linear model for december
+
+1223f1f4-msl:
+    - Specs: anom	1	MSL	282|288.5|-43|-38
+    - Performance: 3rd best 0.47 r^2 svr linearl model for december
+
+7728bf70-msl:
+    - Specs:
+    - Performance: Far best 0.38 r^2 svr linear model for december
+
+59f835e4-adv:
+    - Specs:
+    - Performance: 2nd best 0.38 r^2 svr linear model for december
+
+

@@ -86,11 +86,14 @@ def detrend_data(matrix):
     
     return detrended_matrix
 
-def calculate_anomalies(data, climatology_period, box=None):
+def calculate_anomalies(data, climatology_period, box=None, std=False):
     data_reference = data.sel(time=slice(f"{climatology_period[0]}-01",f"{climatology_period[1]}-12"))
     mean_reference = data_reference.groupby("time.month").mean(dim="time")
     gb_season = data.groupby("time.month")
     anomalies = gb_season - mean_reference
+    if std:
+        std_reference = data_reference.groupby("time.month").std(dim="time")
+        anomalies = anomalies.groupby("time.month")/std_reference
     if box:
         return anomalies.sel(longitude=slice(box[0], box[1]), latitude=slice(box[2], box[3]))
     else:
@@ -130,6 +133,9 @@ class MaxIndex(Index):
         super().__init__(data, variables, box_limit)
         if anomalies:
             self.data = calculate_anomalies(self.data, climatology_period=climatology_period)
+            self.ref_string = "-".join(list(map(str, climatology_period)))
+        else:
+            self.ref_string = "NoRef"
         self.target_period = target_period
         self.rolling_window = rolling_window
         self.frequency = frequency
@@ -191,6 +197,45 @@ class MaxIndex(Index):
             },  index=pd.DatetimeIndex(timestamps, name='Date'))
             
             self.index_dfs[variable_name] = df
+
+    def get_index(self, var=None, season=None, start_year=1972, end_year=2022):
+        """
+        Retrieves the index based on specified parameters.
+        
+        Parameters:
+        -----------
+        var : str, optional
+            Variable name to filter by. If None, all variables are returned.
+        season : str or list, optional
+            Season or list of months to filter by. If None, all months are returned.
+        start_year : int, default=1972
+            Start year for the query.
+        end_year : int, default=2022
+            End year for the query.
+            
+        Returns:
+        --------
+        pandas.DataFrame
+            The requested index data.
+        """
+        # Check if years are within calculated range
+        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+            print("Can not retrieve for not calculated years")
+            return None
+        
+        # Filter by season if specified
+        if season is not None:
+            target_index = target_index.sel(time=is_month(target_index['time.month'], season))
+        
+        # Filter by variable if specified
+        if var is not None:
+            df_index = self.index_dfs[var]
+        
+        df = df_index
+        df.index.name = "Date"
+        df.index = df.index.to_numpy().astype('datetime64[M]')  # Set the index as first day of the month
+        df.index.name = "Date"
+        return df[(df.index.year<= end_year) & (df.index.year>= start_year)]
     
     def get_index_by_variable(self, var, start_year=1972, end_year=2022):
         """
@@ -214,16 +259,15 @@ class MaxIndex(Index):
             target_index.to_parquet(f"{folder_path}/index_{id}.parquet")
             with open(metadata_path, "a") as file:
                 box_string = "|".join(list(map(str, self.box)))
-                ref_string = "NoRef"
                 target_string = "-".join(list(map(str, self.target_period)))
-                file.write(f"{id},index_{id}.parquet,{self.method_string},{self.rolling_window},{var},{box_string},{ref_string},{target_string}\n")
+                file.write(f"{id},index_{id}.parquet,{self.method_string},{self.rolling_window},{var},{box_string},{self.ref_string},{target_string}\n")
             print("Saved")
         return id
     
     def search_id_index(self, var, path):
         rolling = self.rolling_window
         box_string = "|".join(list(map(str, self.box)))
-        ref_string = "NoRef"
+        ref_string = self.ref_string
         target_string = "-".join(list(map(str, self.target_period)))
         meta_inds = pd.read_csv(path)
         ids = meta_inds[(meta_inds["reference_period"]==ref_string) &
