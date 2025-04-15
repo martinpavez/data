@@ -16,6 +16,9 @@ from xgboost import plot_importance
 
 from warnings import simplefilter
 from sklearn.exceptions import ConvergenceWarning
+import tensorflow as tf
+tf.random.set_seed(42)
+
 simplefilter("ignore", category=ConvergenceWarning)
 
 
@@ -256,20 +259,19 @@ class PredictionModel():
         ytrains, ypredtrains = self.train(len_pred)
         ytests, ypreds = self.predict(len_pred)
         # self.cross_validate()
-        self.timeseries_cross_validate()
-        if plot:
-            self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
+        self.timeseries_cross_validate(plot=plot)
+        # if plot:
+        #     self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
 
-    def plot_predictions(self, len_pred, ytrains, ypredtrains, ytests, ypreds):
+    def plot_predictions(self, dates, len_pred, ytrains, ypredtrains, ytests, ypreds):
         fig, axs = plt.subplots(len(self.labels), 1, figsize=(25,15))
-        dates = self.data["Date"]
         train_dates, test_dates = dates[:-len_pred], dates[-len_pred:]
 
-        for i in range(len(self.labels)):
+        for i, label in enumerate(self.labels):
             # Plot training values
             axs[i].plot(
                 train_dates,
-                ytrains[i],
+                ytrains[label],
                 label="Training",
                 marker='o',
                 color='green',
@@ -278,7 +280,7 @@ class PredictionModel():
             )
             axs[i].plot(
                 train_dates,
-                ypredtrains[i],
+                ypredtrains[:,i],
                 label="Predicted Training",
                 marker='x',
                 color='red',
@@ -287,7 +289,7 @@ class PredictionModel():
             )
             axs[i].plot(
                 test_dates,
-                ytests[i],
+                ytests[label],
                 label="Test",
                 marker='o',
                 color='blue',
@@ -296,7 +298,7 @@ class PredictionModel():
             )
             axs[i].plot(
                 test_dates,
-                ypreds[i],
+                ypreds[:,i],
                 label="Predicted Test",
                 marker='x',
                 color='red',
@@ -348,7 +350,7 @@ class PredictionModel():
         self.cv_mape_score = mape_cv
         self.cv_mape_score_average = np.mean(self.cv_mape_score)
     
-    def timeseries_cross_validate(self):
+    def timeseries_cross_validate(self, plot=False):
         r2_tscv = []
         mape_tscv= []
         tscv = TimeSeriesSplit(test_size=5)
@@ -363,6 +365,7 @@ class PredictionModel():
                     train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
                     self.cv_regressor.fit(train_data, y_train)
                     pred = self.cv_regressor.predict(test_data)
+                    
                     r2_tscv_label.append(r2_score(y_test, pred))
                     mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
                 weights = np.array(train_sizes)/np.sum(train_sizes)
@@ -379,6 +382,11 @@ class PredictionModel():
                 # self.regressor.compile(optimizer="adam", loss="mae")
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
+                if plot:
+                    ytrain_pred = self.regressor.predict(X_train)
+                    len_data = len(train_index) + len(test_index)
+                    dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
+                    self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
                 r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
                 mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
             weights = np.array(train_sizes)/np.sum(train_sizes)
@@ -456,10 +464,10 @@ class PredictionExperiment():
         self.num_results = 0
         self.results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
         
-    def execute_experiment(self):
+    def execute_experiment(self, plot=False):
         for season, models in self.models.items():
             for model in models:
-                model.train_predict(self.len_pred)
+                model.train_predict(self.len_pred, plot=plot)
 
     def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
         results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])

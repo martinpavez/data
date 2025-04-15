@@ -64,8 +64,3 @@ Tasks 31/03:
 
 Tasks 09/04:
 - Check phenomenons and visualize them with our data, then set a representative point and repeat the timeseries proyection
-
-
-
-
-
