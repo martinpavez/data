@@ -64,3 +64,8 @@ Tasks 31/03:
 
 Tasks 09/04:
 - Check phenomenons and visualize them with our data, then set a representative point and repeat the timeseries proyection
+
+Reu 23/04:
+    probar modelos mas simples con los indices nuevos
+    implementar medidas de features importance (positivas y negativos). Shapley Values.
+    ver series de tiempo de las q funcionan bn 

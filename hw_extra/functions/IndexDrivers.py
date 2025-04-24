@@ -126,6 +126,25 @@ class Index():
         """
         self.data = self.data[[var.lower() for var in self.variables]]
     
+    def set_index(self, index_df):
+        self.index = index_df
+    
+    def index_df_to_parquet(self, data, folder_path, metadata_path):
+        target_index = self.index
+        # id = self.search_id_index(var, metadata_path)
+        # if id:
+        #     print(f"Found id in metadata: {id}")
+        # else:
+        id = str(uuid.uuid4())[:8] 
+        target_index.to_parquet(f"{folder_path}/index_{id}.parquet")
+        with open(metadata_path, "a") as file:
+            file.write(f"{id},index_{id}.parquet,{data}\n")
+        print("Saved")
+        return id
+    
+    def load_index(self, id, folder_path):
+        self.index = pd.read_parquet(f"{folder_path}/index_{id}.parquet")
+    
 class MaxIndex(Index):
     def __init__(self,data, target_period,
                   variables=["SST", "SP", "TTR", "U10", "V10"], box_limit=[100,290,-30,30],
