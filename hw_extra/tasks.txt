@@ -68,4 +68,13 @@ Tasks 09/04:
 Reu 23/04:
     probar modelos mas simples con los indices nuevos
     implementar medidas de features importance (positivas y negativos). Shapley Values.
-    ver series de tiempo de las q funcionan bn 
+    ver series de tiempo de las q funcionan bn: 
+        - Plotear best model per season TSCV (potentially average best)
+        - Find out a good metric for measuring where our best models fail
+        
+
+Reu 30/04:
+    test smaller NN
+    construct summer model
+    try linear for lasts experiments
+    create new CV: random CV for training/test + metrics on new data

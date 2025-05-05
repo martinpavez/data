@@ -17,7 +17,10 @@ from xgboost import plot_importance
 from warnings import simplefilter
 from sklearn.exceptions import ConvergenceWarning
 import tensorflow as tf
+import shap
 tf.random.set_seed(42)
+import keras
+import copy
 
 simplefilter("ignore", category=ConvergenceWarning)
 
@@ -213,7 +216,6 @@ class PredictionModel():
         if self.is_keras_model:
             X_train = self.reshape_for_keras(X_train)
             X_test = self.reshape_for_keras(X_test)
-            self.regressor.compile(optimizer="adam", loss="mae")
             self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
             y_pred_train = self.regressor.predict(X_train)
         else:
@@ -255,11 +257,14 @@ class PredictionModel():
         
         return y_train, y_pred
     
-    def train_predict(self, len_pred, plot=False):
+    def train_predict(self, len_pred, plot=False,label_plot=None):
+        if self.is_keras_model:
+            self.regressor.compile(optimizer="adam", loss="mae")
+            self.regressor.save_weights('model.h5')
         ytrains, ypredtrains = self.train(len_pred)
         ytests, ypreds = self.predict(len_pred)
         # self.cross_validate()
-        self.timeseries_cross_validate(plot=plot)
+        self.timeseries_cross_validate(plot=plot, label_plot=label_plot)
         # if plot:
         #     self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
 
@@ -337,6 +342,8 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_r2_score) + [self.tscv_r2_score_average]
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mape_score) + [self.tscv_mape_score_average]
+            elif metric == "mae":
+                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mae_score) + [self.tscv_mae_score_average]
     
     def cross_validate(self, cv=10):
         r2_cv = []
@@ -350,10 +357,19 @@ class PredictionModel():
         self.cv_mape_score = mape_cv
         self.cv_mape_score_average = np.mean(self.cv_mape_score)
     
-    def timeseries_cross_validate(self, plot=False):
+    def timeseries_cross_validate(self, plot=False, label_plot=None):
         r2_tscv = []
         mape_tscv= []
+        mae_tscv= []
         tscv = TimeSeriesSplit(test_size=5)
+        if label_plot:
+            cv_dates_list = []
+            cv_ytrains_list = []
+            cv_ypredtrains_list = []
+            cv_ytests_list = []
+            cv_ypreds_list = []
+            idx_label = self.labels.index(label_plot)
+
         if not self.is_keras_model:
             for label in self.labels:
                 X, y = self.data[self.features], self.data[label]
@@ -379,24 +395,110 @@ class PredictionModel():
                 train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
-                # self.regressor.compile(optimizer="adam", loss="mae")
+                # self.regressor.load_weights('model.h5')
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
+                ytrain_pred = self.regressor.predict(X_train)
+                len_data = len(train_index) + len(test_index)
+                dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
+                train_dates, test_dates = dates[:len(train_index)], dates[len(train_index):]
                 if plot:
-                    ytrain_pred = self.regressor.predict(X_train)
-                    len_data = len(train_index) + len(test_index)
-                    dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
                     self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
+                if label_plot:
+                    cv_dates_list.append((train_dates, test_dates))
+                    cv_ytrains_list.append(y_train.iloc[:, idx_label].values) 
+                    cv_ypredtrains_list.append(ytrain_pred[:, idx_label])
+                    cv_ytests_list.append(y_test[self.labels[idx_label]].values)
+                    cv_ypreds_list.append(pred[:, idx_label])
                 r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
                 mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
+                mae_tscv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
+            
+            r2_folds = np.array(r2_tscv)
+            mape_folds = np.array(mape_tscv)
+            mae_folds = np.array(mae_tscv)
             weights = np.array(train_sizes)/np.sum(train_sizes)
-            r2_tscv = np.dot(np.array(r2_tscv).T,weights)
-            mape_tscv = np.dot(np.array(mape_tscv).T,weights)
-        
+            r2_tscv = np.dot(r2_folds.T,weights)
+            mape_tscv = np.dot(mape_folds.T,weights)
+            mae_tscv = np.dot(mae_folds.T,weights)
+
+        if label_plot:
+            r2_folds = r2_folds[:, idx_label]
+            mape_folds = mape_folds[:, idx_label]
+            mae_folds = mae_folds[:, idx_label]
+            self.plot_cv_folds_for_label(
+                cv_dates_list,
+                cv_ytrains_list,
+                cv_ypredtrains_list,
+                cv_ytests_list,
+                cv_ypreds_list,
+                label=self.labels[idx_label],
+                r2_per_fold=r2_folds,
+                mape_per_fold=mape_folds
+            )
         self.tscv_r2_score = r2_tscv
         self.tscv_r2_score_average = np.mean(r2_tscv)
         self.tscv_mape_score = mape_tscv
         self.tscv_mape_score_average = np.mean(mape_tscv)
+        self.tscv_mae_score = mae_tscv
+        self.tscv_mae_score_average = np.mean(mae_tscv)
+
+    
+    def plot_cv_folds_for_label(self, dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list, label, r2_per_fold=None, mape_per_fold=None):
+        n_folds = len(dates_list)
+        last_train_dates, last_test_dates = dates_list[-1]
+        x_min = last_train_dates.min()
+        x_max = last_test_dates.max() + pd.DateOffset(years=2)
+        
+        for fold_idx, ((train_dates, test_dates), y_train, y_pred_train, y_test, y_pred) in enumerate(
+            zip(dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list)
+        ):
+            fig, ax = plt.subplots(figsize=(25, 3))
+
+            # Plot training data
+            ax.plot(train_dates, y_train,label="Training",
+                marker='o',
+                color='green',
+                linestyle='-',
+                linewidth=1.5
+            )
+            ax.plot(train_dates, y_pred_train,
+                label="Predicted Training",
+                marker='x',
+                color='red',
+                linestyle='-',
+                linewidth=1.5
+            )
+            # Plot test data
+            ax.plot(test_dates, y_test,
+                label="Test",
+                marker='o',
+                color='blue',
+                linestyle='-',
+                linewidth=1.5
+            )
+            ax.plot(test_dates, y_pred,
+                label="Predicted Test",
+                marker='x',
+                color='red',
+                linestyle='--',
+                linewidth=1.5
+            )
+            ax.set_xlim([x_min, x_max])
+            r2_text = f"R²: {r2_per_fold[fold_idx]:.3f}" if r2_per_fold is not None else ""
+            mape_text = f"MAPE: {mape_per_fold[fold_idx]*100:.2f}%" if mape_per_fold is not None else ""
+
+            # Add metrics to title
+            title = f"TSCV Fold {fold_idx + 1} Predictions for {label}"
+            if r2_text or mape_text:
+                title += f"\n{r2_text} | {mape_text}"
+
+            ax.set_title(title)
+            ax.set_xlabel("Date")
+            ax.set_ylabel(label)
+            ax.legend(loc='upper right')
+            plt.tight_layout()
+            plt.show()
 
     def mdi_importance(self):
         if len(self.labels) == 1 and "RF" in self.name_regressor:
@@ -446,6 +548,91 @@ class PredictionModel():
         ax.set_title(f"Feature importances ({type}) on model {self.name_regressor} for season {self.season}")
         plt.show()
 
+    def nn_feature_importance(self, len_pred=5, n_repeats=10, plot=True):
+        """
+        Calculate feature importance for Keras neural network model using permutation importance.
+        
+        Parameters:
+        -----------
+        len_pred : int, optional
+            Number of samples to use for prediction. If None, uses all data.
+        n_repeats : int, default=10
+            Number of times to permute each feature.
+        plot : bool, default=True
+            Whether to plot the feature importance.
+        
+        Returns:
+        --------
+        pd.Series
+            Feature importance values indexed by feature names.
+        """
+        if not self.is_keras_model:
+            return "Not a Keras model. Use appropriate importance method for this model type."
+        
+        # Prepare data
+        X = self.data[self.features]
+        y = self.data[self.labels]
+        
+        if len_pred is not None:
+            # Use test data if len_pred is provided
+            X_test = X[-len_pred:].copy()
+            y_test = y[-len_pred:].copy()
+        else:
+            # Use all data if len_pred is None
+            X_test = X.copy()
+            y_test = y.copy()
+        
+        # Reshape for Keras
+        X_test_reshaped = self.reshape_for_keras(X_test)
+        
+        # Calculate baseline score
+        baseline_y_pred = self.regressor.predict(X_test_reshaped)
+        baseline_score = mean_absolute_error(y_test, baseline_y_pred)
+        
+        # Calculate importance for each feature
+        importances = {}
+        importances_std = {}
+        
+        for feature in self.features:
+            feature_importance = []
+            for _ in range(n_repeats):
+                # Create a copy of the data and shuffle the feature
+                X_permuted = X_test.copy()
+                X_permuted[feature] = np.random.permutation(X_permuted[feature].values)
+                
+                # Reshape for Keras
+                X_permuted_reshaped = self.reshape_for_keras(X_permuted)
+                
+                # Predict and calculate score
+                permuted_y_pred = self.regressor.predict(X_permuted_reshaped)
+                permuted_score = mean_absolute_error(y_test, permuted_y_pred)
+                
+                # The importance is the difference in score
+                # Higher difference means more important feature
+                feature_importance.append(permuted_score - baseline_score)
+            
+            importances[feature] = np.mean(feature_importance)
+            importances_std[feature] = np.std(feature_importance)
+        
+        # Convert to pandas Series
+        importance_series = pd.Series(importances)
+        std_series = pd.Series(importances_std)
+        
+        # Sort by importance
+        importance_series = importance_series.sort_values(ascending=False)
+        std_series = std_series.reindex(importance_series.index)
+        
+        # Plot if requested
+        if plot:
+            fig, ax = plt.subplots(figsize=(15, 8))
+            importance_series.plot.bar(yerr=std_series, ax=ax)
+            ax.set_title(f"Feature importances using permutation for Keras model on season {self.season}")
+            ax.set_ylabel("Mean MAE increase")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.show()
+        
+        return importance_series
 
  
 
@@ -464,10 +651,10 @@ class PredictionExperiment():
         self.num_results = 0
         self.results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
         
-    def execute_experiment(self, plot=False):
+    def execute_experiment(self, plot=False, label_plot=None):
         for season, models in self.models.items():
             for model in models:
-                model.train_predict(self.len_pred, plot=plot)
+                model.train_predict(self.len_pred, plot=plot, label_plot=label_plot)
 
     def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
         results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
@@ -505,4 +692,6 @@ class PredictionExperiment():
                     mod.svm_importance()
                 elif method=="xgboost":
                     mod.xgb_importance(xgbtype)
+                elif method=="nn":
+                    mod.nn_feature_importance()
                 return
