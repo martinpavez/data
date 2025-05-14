@@ -40,7 +40,7 @@ Construct a 12 season ensembled model (with best model in validation), then test
 Download: 
 - U,V,T at 850hpa
 - MSLP
-
+ 
 
 Reu Victoria 24/03:
 
@@ -78,3 +78,13 @@ Reu 30/04:
     construct summer model
     try linear for lasts experiments
     create new CV: random CV for training/test + metrics on new data
+
+
+Reu 07/05:
+    Test N seeds to quantify impact of seed: visualization (kernel density) and errors (std)
+    Try labels separetely or groups of intensity/magnitud
+    Try only for quinta normal, to check if features work better locally
+
+
+Reu 13/05:
+    Check on January relevance function

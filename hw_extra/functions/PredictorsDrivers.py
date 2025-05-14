@@ -8,6 +8,44 @@ import pickle
 from IndexDrivers import MultivariatePCA
 
 ### AUXILIAR FUNCTIONS
+def add_adjacent_month_values(df):
+    """
+    For each column in a date-indexed DataFrame, add two new columns containing
+    the values from the previous month and the next month.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        A DataFrame with a DatetimeIndex at the monthly frequency
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        The original DataFrame with added columns for previous and next month values
+    
+    Example:
+    --------
+    If df has columns ['A', 'B'], the result will have columns 
+    ['A', 'A_prev_month', 'A_next_month', 'B', 'B_prev_month', 'B_next_month']
+    """
+    # Make a copy to avoid modifying the original DataFrame
+    result = df.copy()
+
+    # For each column in the original DataFrame
+    original_columns = list(df.columns)
+    for col in original_columns:
+        # Add previous month values (shift forward)
+        result[f"{col}_prev_month"] = result[col].shift(1)
+        
+        # Add next month values (shift backward)
+        result[f"{col}_next_month"] = result[col].shift(-1)
+    
+    # Reorder columns so each original column is followed by its prev and next month columns
+    new_columns = []
+    for col in original_columns:
+        new_columns.extend([col, f"{col}_prev_month", f"{col}_next_month"])
+    
+    return result[new_columns]
 
 def compute_correlations(df, num_indices=5, method='pearson'):
     """
@@ -152,13 +190,14 @@ def get_top_corr(all_corr_df, top_n):
 ### PREDICTORS FUNCTIONS
 
 class Predictor():
-    def __init__(self, start_year=1972, end_year=2022, frequency="monthly"):
+    def __init__(self, start_year=1972, end_year=2022, frequency="monthly", stations=None):
         self.experiments = {}
         self.data_experiments = {}
         self.num_experiments = 0
         self.frequency = frequency
         self.start_year = start_year
         self.end_year = end_year
+        self.stations = stations
 
     def calculate_predictors(self):
         pass
@@ -174,6 +213,9 @@ class Predictor():
         elif self.frequency=="yearly":
             dfs = pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}"),pd.to_datetime(f"{self.end_year}"),freq=pd.offsets.YearBegin(1)))
             dfs.index.name = "Date"
+        elif self.frequency=="summerly":
+            dfs = {1:pd.DataFrame(index=pd.date_range(pd.to_datetime(f"{self.start_year}"),pd.to_datetime(f"{self.end_year}"),freq=pd.offsets.YearBegin(1))) }
+            dfs[1].index.name = "Date"
         self.experiments[self.num_experiments] = dfs
         self.data_experiments[self.num_experiments] = list()
         self.num_experiments += 1
@@ -197,6 +239,13 @@ class Predictor():
                     for col in list(predictor.columns):
                         df_new[f"{name}-{col}"] = predictor[col]
                 new_exp[season] = df_new
+        elif self.frequency=="summerly":
+            df_new = experiment[1].copy()
+            predictors_summer = [add_adjacent_month_values(predictor) for predictor in predictors] 
+            for name, predictor in zip(names, predictors_summer):
+                for col in list(predictor.columns):
+                    df_new[f"{name}-{col}"] = predictor[col]
+            new_exp = {1: df_new}
         self.data_experiments[self.num_experiments] = data + ["-".join(names)]
         self.experiments[self.num_experiments] = new_exp
 
@@ -213,7 +262,7 @@ class Predictor():
         except KeyError:
             experiment, num = self.create_empty_experiment()
             data = self.data_experiments[num]
-        if self.frequency=="monthly":
+        if self.frequency in ["monthly", "summerly"]:
             new_exp = {}
             for season, df in experiment.items():
                 df_new = df.copy()
@@ -229,9 +278,11 @@ class Predictor():
     def experiment_to_parquet(self, experiment, folder_path, metadata_path):
         dfs = self.experiments[experiment]
         data = self.data_experiments[experiment]
+        if self.stations:
+            data.append("-".join(self.stations))
         data_string = ",".join(data)
         id = str(uuid.uuid4())[:8]
-        if self.frequency == "monthly":
+        if self.frequency in ["monthly", "summerly"]:
             for season, df in dfs.items():
                 name = f"predictor_{id}_{season}.parquet"
                 df.to_parquet(f"{folder_path}/{name}")

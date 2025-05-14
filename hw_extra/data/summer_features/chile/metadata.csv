@@ -1,0 +1,8 @@
+id,filename,season,indices
+6bfb94aa,predictor_6bfb94aa_1.parquet,1,54fdbdb3-2afba2c1-1d705895-6e909044-ef22ff7b-89c8a7d7-34927281-6d2d4667-c56650d1-98386d86-65186a96-82ac50d8-PDO-SAM-DMI
+d5ec141a,predictor_d5ec141a_1.parquet,1,PDO-ONI-SAM-DMI
+3c59cc03,predictor_3c59cc03_1.parquet,1,c8260118-1e8ced6f-26976a3c-e0fba9b4-7e5d8e97-64c6871d-d075b3bb-0f965243-PDO-SAM-DMI
+cb34c388,predictor_cb34c388_1.parquet,1,c8260118-1e8ced6f-26976a3c-e0fba9b4-7e5d8e97-PDO-SAM-DMI
+4f14de2d,predictor_4f14de2d_1.parquet,1,c8260118-1e8ced6f-26976a3c-e0fba9b4-7e5d8e97-64c6871d-d075b3bb-0f965243
+891b838a,predictor_891b838a_1.parquet,1,c8260118-1e8ced6f-26976a3c-e0fba9b4-7e5d8e97-73f26a9f-f12683c1-f955ff1c-6447140c
+5bcdae55,predictor_5bcdae55_1.parquet,1,c8260118-1e8ced6f-26976a3c-e0fba9b4-7e5d8e97-73f26a9f-f12683c1-f955ff1c-6447140c-PDO-SAM-DMI

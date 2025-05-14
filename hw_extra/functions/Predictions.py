@@ -21,6 +21,9 @@ import shap
 tf.random.set_seed(42)
 import keras
 import copy
+from sklearn.model_selection import KFold
+import tensorflow.keras.backend as K
+
 
 simplefilter("ignore", category=ConvergenceWarning)
 
@@ -40,10 +43,10 @@ def get_info_experiment(id_data, metadata_exp_path, metadata_index_path, extra_i
     
     return pd.concat([metadata_indices.loc[my_indices],metadata_extra.loc[extra_indices]], axis=0)
 
-def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1):
+def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise"):
 
     # Filter for prediction stage based on metric
-    prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "GPR-rbf-noise")]
+    prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "Linear")]
     #prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric)]
 
 
@@ -57,7 +60,7 @@ def summarize_best_results_by_index(results, metadata, metric="r2", stage="predi
         best_results = best_results.groupby("index").apply(lambda x: x.nsmallest(top_n, "best_value")).reset_index(drop=True)
 
     # Get corresponding training values
-    if metric in ["r2", "mape"] and stage not in ["CV","TSCV"]:
+    if metric in ["r2", "mape", "mae"] and stage not in ["CV","TSCV"]:
         training_results = results[(results["stage"] == "training") & (results["metric"] == metric) & results["id_data"].isin(best_results["id_data"])]
         training_results = training_results.set_index(["model", "season", "id_data"])[["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]].stack().reset_index()
         training_results.columns = ["model", "season", "id_data", "index", "training_value"]
@@ -177,10 +180,8 @@ class PredictionModel():
             self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
         if len(self.labels) > 1 and not self.is_keras_model:
             self.regressor = MultiOutputRegressor(regressor)
-            
         else:
             self.regressor = regressor
-
         self.cv_regressor = regressor
 
     def form_matrix(self, data):
@@ -188,16 +189,11 @@ class PredictionModel():
         #data['Date'] = data['Date'].dt.to_period('M').astype(str)
 
         features = data.columns.difference(self.labels)
-        if "SVR" in self.name_regressor:
-            scaler = StandardScaler().fit(data[features])
-            data[features] = scaler.transform(data[features])
-        if self.is_keras_model:
-            # Standardize inputs
-            self.scaler_X = StandardScaler()
-            self.label_scaler = StandardScaler()
-
-            data[features] = self.scaler_X.fit_transform(data[features])
-            data[self.labels] = self.label_scaler.fit_transform(data[self.labels])
+        self.label_scaler = StandardScaler()
+        data[self.labels] = self.label_scaler.fit_transform(data[self.labels])
+        if "SVR" in self.name_regressor or self.is_keras_model:
+            self.scaler_X = StandardScaler().fit(data[features])
+            data[features] = self.scaler_X.transform(data[features])
         
         return data, features
     
@@ -227,9 +223,6 @@ class PredictionModel():
         self.mae_average_training = mean_absolute_error(y_train, y_pred_train)
         self.mape_average_training = mean_absolute_percentage_error(y_train, y_pred_train)
         self.r2_average_training = r2_score(y_train, y_pred_train)
-        if self.is_keras_model:
-            self.mae_training = self.mae_training * self.label_scaler.scale_
-            self.mae_average_training = self.mae_average_training * self.label_scaler.scale_
         return y_train, y_pred_train
 
     def predict(self, len_pred):
@@ -250,20 +243,19 @@ class PredictionModel():
         self.mae_average_pred = mean_absolute_error(y_test, y_pred)
         self.mape_average_pred = mean_absolute_percentage_error(y_test, y_pred)
         self.r2_average_pred = r2_score(y_test, y_pred)
-        if self.is_keras_model:
-            self.mae_pred = self.mae_pred * self.label_scaler.scale_
-            self.mae_average_pred = self.mae_average_pred * self.label_scaler.scale_
 
-        
-        return y_train, y_pred
+        return y_test, y_pred
+    
+    def compile_keras_model(self):
+        self.regressor.compile(optimizer="adam", loss="mae")
+        self.regressor.save_weights('model.h5')
     
     def train_predict(self, len_pred, plot=False,label_plot=None):
         if self.is_keras_model:
-            self.regressor.compile(optimizer="adam", loss="mae")
-            self.regressor.save_weights('model.h5')
+            self.compile_keras_model()
         ytrains, ypredtrains = self.train(len_pred)
         ytests, ypreds = self.predict(len_pred)
-        # self.cross_validate()
+        self.cross_validate()
         self.timeseries_cross_validate(plot=plot, label_plot=label_plot)
         # if plot:
         #     self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
@@ -337,6 +329,8 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_r2_score) + [self.cv_r2_score_average]
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mape_score) + [self.cv_mape_score_average]
+            elif metric == "mae":
+                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mae_score) + [self.cv_mae_score_average]
         elif stage=="TSCV":
             if metric=="r2":
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_r2_score) + [self.tscv_r2_score_average]
@@ -348,14 +342,44 @@ class PredictionModel():
     def cross_validate(self, cv=10):
         r2_cv = []
         mape_cv = []
-        for label in self.labels:
-            X, y = self.data[self.features], self.data[label]
-            r2_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='r2').mean())
-            mape_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_percentage_error').mean())
+        mae_cv = []
+        if not self.is_keras_model:
+            for label in self.labels:
+                X, y = self.data[self.features], self.data[label]
+                r2_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='r2').mean())
+                mape_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_percentage_error').mean())
+                mae_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_error').mean())
+        else:
+            kf = KFold(n_splits=cv, shuffle=True, random_state=42)
+            X, y = self.data[self.features], self.data[self.labels]
+            train_sizes = []
+            for train_index, test_index in kf.split(X):
+                train_sizes.append(len(train_index))
+                train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+                X_train = self.reshape_for_keras(train_data)
+                X_test = self.reshape_for_keras(test_data)
+                self.cv_regressor.load_weights('model.h5')
+                self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+                self.cv_regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+                pred = self.regressor.predict(X_test)
+                r2_cv.append(r2_score(y_test, pred, multioutput="raw_values")) 
+                mape_cv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
+                mae_cv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
+            
+            r2_folds = np.array(r2_cv)
+            mape_folds = np.array(mape_cv)
+            mae_folds = np.array(mae_cv)
+            weights = np.array(train_sizes)/np.sum(train_sizes)
+            r2_cv = np.dot(r2_folds.T,weights)
+            mape_cv = np.dot(mape_folds.T,weights)
+            mae_cv = np.dot(mae_folds.T,weights)
+
         self.cv_r2_score = r2_cv
         self.cv_r2_score_average = np.mean(self.cv_r2_score)
         self.cv_mape_score = mape_cv
         self.cv_mape_score_average = np.mean(self.cv_mape_score)
+        self.cv_mae_score = mae_cv
+        self.cv_mae_score_average = np.mean(self.cv_mae_score)
     
     def timeseries_cross_validate(self, plot=False, label_plot=None):
         r2_tscv = []
@@ -375,6 +399,7 @@ class PredictionModel():
                 X, y = self.data[self.features], self.data[label]
                 r2_tscv_label = []
                 mape_tscv_label = []
+                mae_tscv_label = []
                 train_sizes = []
                 for train_index, test_index in tscv.split(X):
                     train_sizes.append(len(train_index))
@@ -384,9 +409,11 @@ class PredictionModel():
                     
                     r2_tscv_label.append(r2_score(y_test, pred))
                     mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
+                    mae_tscv_label.append(mean_absolute_error(y_test, pred))
                 weights = np.array(train_sizes)/np.sum(train_sizes)
                 r2_tscv.append(np.sum(weights*r2_tscv_label))
                 mape_tscv.append(np.sum(weights*mape_tscv_label))
+                mae_tscv.append(np.sum(weights*mae_tscv_label))
         else:
             X, y = self.data[self.features], self.data[self.labels]
             train_sizes = []
@@ -395,7 +422,8 @@ class PredictionModel():
                 train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
-                # self.regressor.load_weights('model.h5')
+                self.regressor.load_weights('model.h5')
+                self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
                 ytrain_pred = self.regressor.predict(X_train)
@@ -434,7 +462,8 @@ class PredictionModel():
                 cv_ypreds_list,
                 label=self.labels[idx_label],
                 r2_per_fold=r2_folds,
-                mape_per_fold=mape_folds
+                mape_per_fold=mape_folds,
+                mae_per_fold=mae_folds
             )
         self.tscv_r2_score = r2_tscv
         self.tscv_r2_score_average = np.mean(r2_tscv)
@@ -444,7 +473,7 @@ class PredictionModel():
         self.tscv_mae_score_average = np.mean(mae_tscv)
 
     
-    def plot_cv_folds_for_label(self, dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list, label, r2_per_fold=None, mape_per_fold=None):
+    def plot_cv_folds_for_label(self, dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list, label, r2_per_fold=None, mape_per_fold=None, mae_per_fold=None):
         n_folds = len(dates_list)
         last_train_dates, last_test_dates = dates_list[-1]
         x_min = last_train_dates.min()
@@ -486,12 +515,13 @@ class PredictionModel():
             )
             ax.set_xlim([x_min, x_max])
             r2_text = f"R²: {r2_per_fold[fold_idx]:.3f}" if r2_per_fold is not None else ""
+            mae_text = f"MAE: {mae_per_fold[fold_idx]:.3f}" if mae_per_fold is not None else ""
             mape_text = f"MAPE: {mape_per_fold[fold_idx]*100:.2f}%" if mape_per_fold is not None else ""
 
             # Add metrics to title
             title = f"TSCV Fold {fold_idx + 1} Predictions for {label}"
-            if r2_text or mape_text:
-                title += f"\n{r2_text} | {mape_text}"
+            if r2_text or mape_text or mae_text:
+                title += f"\n{r2_text} | {mape_text} | {mae_text}"
 
             ax.set_title(title)
             ax.set_xlabel("Date")
