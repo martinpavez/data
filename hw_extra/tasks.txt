@@ -88,3 +88,7 @@ Reu 07/05:
 
 Reu 13/05:
     Check on January relevance function
+
+Tasks:
+    - Visualize best results till now
+    - Execute SERA metric for every experiment

@@ -43,15 +43,15 @@ def get_info_experiment(id_data, metadata_exp_path, metadata_index_path, extra_i
     
     return pd.concat([metadata_indices.loc[my_indices],metadata_extra.loc[extra_indices]], axis=0)
 
-def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise"):
+def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise", indices_of_interest=["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]):
 
     # Filter for prediction stage based on metric
-    prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "Linear")]
-    #prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric)]
+    # prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "Linear")]
+    prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric)]
 
 
     # Find the top N best values per index (maximize for r2 and cv_r2, minimize for mape)
-    best_results = prediction_results.set_index(["model", "season", "id_data"])[["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]].stack().reset_index()
+    best_results = prediction_results.set_index(["model", "season", "id_data"])[indices_of_interest].stack().reset_index()
     best_results.columns = ["model", "season", "id_data", "index", "best_value"]
     
     if metric =="r2":
@@ -62,7 +62,7 @@ def summarize_best_results_by_index(results, metadata, metric="r2", stage="predi
     # Get corresponding training values
     if metric in ["r2", "mape", "mae"] and stage not in ["CV","TSCV"]:
         training_results = results[(results["stage"] == "training") & (results["metric"] == metric) & results["id_data"].isin(best_results["id_data"])]
-        training_results = training_results.set_index(["model", "season", "id_data"])[["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]].stack().reset_index()
+        training_results = training_results.set_index(["model", "season", "id_data"])[indices_of_interest].stack().reset_index()
         training_results.columns = ["model", "season", "id_data", "index", "training_value"]
 
         # Merge best prediction results with training values
@@ -73,6 +73,41 @@ def summarize_best_results_by_index(results, metadata, metric="r2", stage="predi
     # Merge with metadata
     summary = summary.merge(metadata, on=["id_data","season"], how="left")
 
+    # Save summary
+    #summary.to_csv(f"summary_best_{metric}_results.csv", index=False)
+
+    return summary
+
+def summarize_all_results(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise", indices_of_interest=["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]):
+
+    # Filter for prediction stage based on metric
+    # prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "Linear")]
+    prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["id_data"]!="c6b5cfea")]
+
+
+    # Find the top N best values per index (maximize for r2 and cv_r2, minimize for mape)
+    best_results = prediction_results.set_index(["model", "season", "id_data", "source"])[indices_of_interest].stack().reset_index()
+    best_results.columns = ["model", "season", "id_data", "source", "index", "best_value"]
+    
+    if metric =="r2":
+        best_results = best_results.groupby("index").apply(lambda x: x.nlargest(top_n, "best_value")).reset_index(drop=True)
+    else:  # metric == "mape"
+        best_results = best_results.groupby("index").apply(lambda x: x.nsmallest(top_n, "best_value")).reset_index(drop=True)
+
+    # Get corresponding training values
+    if metric in ["r2", "mape", "mae"] and stage not in ["CV","TSCV"]:
+        training_results = results[(results["stage"] == "training") & (results["metric"] == metric) & results["id_data"].isin(best_results["id_data"])]
+        training_results = training_results.set_index(["model", "season", "id_data", "source"])[indices_of_interest].stack().reset_index()
+        training_results.columns = ["model", "season", "id_data","source", "index", "training_value"] 
+
+        # Merge best prediction results with training values
+        summary = best_results.merge(training_results, on=["model", "season", "id_data", "source", "index"], how="left")
+
+    else:
+        summary = best_results
+    # Merge with metadata
+    summary = summary.merge(metadata, on=["id_data","season", "source"], how="left")
+    summary.drop(columns="filename", inplace=True)
     # Save summary
     #summary.to_csv(f"summary_best_{metric}_results.csv", index=False)
 
@@ -212,7 +247,7 @@ class PredictionModel():
         if self.is_keras_model:
             X_train = self.reshape_for_keras(X_train)
             X_test = self.reshape_for_keras(X_test)
-            self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+            self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=1, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
             y_pred_train = self.regressor.predict(X_train)
         else:
             self.regressor.fit(X_train, y_train)
@@ -246,8 +281,11 @@ class PredictionModel():
 
         return y_test, y_pred
     
-    def compile_keras_model(self):
-        self.regressor.compile(optimizer="adam", loss="mae")
+    def compile_keras_model(self, metrics=[]):
+        if metrics:
+            self.regressor.compile(optimizer="adam", loss="mae", metrics=metrics)
+        else:
+            self.regressor.compile(optimizer="adam", loss="mae")
         self.regressor.save_weights('model.h5')
     
     def train_predict(self, len_pred, plot=False,label_plot=None):
