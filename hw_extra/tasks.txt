@@ -92,3 +92,11 @@ Reu 13/05:
 Tasks:
     - Visualize best results till now
     - Execute SERA metric for every experiment
+
+
+Tasks 13/06:
+    Review both PRs
+    Build advection and wind drivers
+    Check sensibility of better relevance functions:
+        - Check the relevance function per season per index and compare them visually
+        - Develop maybe the inverse distribution relevance function and compare

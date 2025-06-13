@@ -24,6 +24,8 @@ import copy
 from sklearn.model_selection import KFold
 import tensorflow.keras.backend as K
 
+from scipy.interpolate import PchipInterpolator
+from statsmodels.stats.stattools import medcouple
 
 simplefilter("ignore", category=ConvergenceWarning)
 
@@ -60,7 +62,7 @@ def summarize_best_results_by_index(results, metadata, metric="r2", stage="predi
         best_results = best_results.groupby("index").apply(lambda x: x.nsmallest(top_n, "best_value")).reset_index(drop=True)
 
     # Get corresponding training values
-    if metric in ["r2", "mape", "mae"] and stage not in ["CV","TSCV"]:
+    if metric in ["r2", "mape", "mae", "sera"] and stage not in ["CV","TSCV"]:
         training_results = results[(results["stage"] == "training") & (results["metric"] == metric) & results["id_data"].isin(best_results["id_data"])]
         training_results = training_results.set_index(["model", "season", "id_data"])[indices_of_interest].stack().reset_index()
         training_results.columns = ["model", "season", "id_data", "index", "training_value"]
@@ -201,10 +203,121 @@ def get_top_n_indices(df: pd.DataFrame, n: int, id, metric, stage):
     
     return indices
 
+### SERA
+
+def compute_adjusted_boxplot_bounds(y):
+    """
+    Compute adjusted boxplot bounds using medcouple (MC) for skewness adjustment.
+    """
+    q1 = np.percentile(y, 25)
+    q3 = np.percentile(y, 75)
+    iqr = q3 - q1
+    mc = medcouple(y)
+
+    if mc >= 0:
+        lower = q1 - 1.5 * np.exp(-4 * mc) * iqr
+        upper = q3 + 1.5 * np.exp(3 * mc) * iqr
+    else:
+        lower = q1 - 1.5 * np.exp(-3 * mc) * iqr
+        upper = q3 + 1.5 * np.exp(4 * mc) * iqr
+
+    median = np.median(y)
+    return lower, median, upper
+
+def create_relevance_function(y):
+    """
+    Create a PCHIP-based relevance function φ(y) using Tukey boxplot bounds.
+    """
+    lower, median, upper = compute_adjusted_boxplot_bounds(y)
+    
+    # Extend with actual min/max to smooth edges
+    # x = np.array([min(y), lower, median, upper, max(y)])
+    x = np.array([lower, median, upper, max(y)])
+    # if x[1] < x[0]:
+    #     x[1] = (x[0]+ x[2])/2
+    relevance = np.array([0, 0, 1.0, 1.0])
+
+    # Ensure strictly increasing x by removing duplicate values
+    x_unique, idx = np.unique(x, return_index=True)
+    relevance_unique = relevance[idx]
+    # print("Relevance points", x_unique)
+    pchip = PchipInterpolator(x_unique, relevance_unique, extrapolate=True)
+    return pchip
+
+def compute_sera(y_true, y_pred, relevance_fn, step=0.01):
+    """
+    Compute SERA metric given true values, predictions, and a relevance function φ(y).
+    """
+    t_values = np.arange(0, 1 + step, step)
+    ser_t = []
+
+    for t in t_values:
+        indices = [i for i, y in enumerate(y_true) if relevance_fn(y) >= t]
+        if len(indices) == 0:
+            ser_t.append(0.0)
+            continue
+        squared_errors = [(y_pred[i] - y_true[i]) ** 2 for i in indices]
+        ser_t.append(np.sum(squared_errors))
+
+    sera_score = np.trapz(ser_t, t_values)
+    return sera_score, t_values, ser_t
+
+def piecewise_linear_phi(y, bounds):
+    x1, x2, x3, x4 = tf.unstack(bounds)
+    iqr = (x3-x2)
+    x1, x2, x3, x4, x5, x6, x7 = x1, x2, x2+iqr/4, x2+ iqr/2, x2 + iqr*0.75, x3, x4
+    y1, y2, y3, y4, y5, y6, y7 = 0, 0.2, 0.4, 0.5, 0.82, 1, 1
+    return tf.where(
+        y <= x1, tf.zeros_like(y),
+        tf.where(
+            y <= x2,  y2 + (y2-y1)/(x2-x1)*(y-x2),
+            tf.where(
+                y <= x3, y3 + (y3-y2)/(x3-x2)*(y-x3),
+                tf.where(
+                    y <= x4, y4 + (y4-y3)/(x4-x3)*(y-x4),
+                    tf.where(
+                        y <= x5, y5 + (y5-y4)/(x5-x4)*(y-x5),
+                        tf.where(
+                            y <= x6, y6 + (y6-y5)/(x6-x5)*(y-x6), 
+                            tf.where(
+                                y <= x7, tf.ones_like(y), tf.ones_like(y) 
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+class SERA(tf.keras.losses.Loss):
+    def __init__(self, bounds, T=100, name="sera_loss"):
+        super().__init__(name=name)
+        self.bounds = tf.constant(bounds, dtype=tf.float32)
+        self.T = T
+        self.thresholds = tf.linspace(0.0, 1.0, T + 1)
+        # self.relevance = relevance_fn
+
+    def call(self, y_true, y_pred):
+        y_true = tf.reshape(y_true, [-1])
+        y_pred = tf.reshape(y_pred, [-1])
+        errors = tf.square(y_pred - y_true)
+        relevance = piecewise_linear_phi(y_true, self.bounds)
+
+        total = tf.constant(0.0, dtype=tf.float32)
+        for i in range(self.T + 1):
+            t = self.thresholds[i]
+            mask = relevance >= t
+            masked_errors = tf.boolean_mask(errors, mask)
+            if tf.size(masked_errors) > 0:
+                weight = 0.5 if (i == 0 or i == self.T) else 1.0
+                total += weight * tf.reduce_sum(masked_errors)
+
+        return total / tf.cast(self.T, tf.float32)
+
 ### PREDICTION
 
 class PredictionModel():
-    def __init__(self, data, season, labels, regressor, name_regressor=None, frequency="bimonthly"):
+    def __init__(self, data, season, labels, regressor, name_regressor=None, frequency="bimonthly", loss_fn="mae"):
         self.labels = labels
         self.season = season
         self.name_regressor = name_regressor
@@ -213,11 +326,12 @@ class PredictionModel():
         self.data, self.features = self.form_matrix(data)
         if self.is_keras_model:
             self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+            self.custom_loss = loss_fn
         if len(self.labels) > 1 and not self.is_keras_model:
             self.regressor = MultiOutputRegressor(regressor)
         else:
             self.regressor = regressor
-        self.cv_regressor = regressor
+        # self.cv_regressor = regressor (Had it to do it label by label before refactor cv and tscv)
 
     def form_matrix(self, data):
         #data['Date'] = pd.to_datetime(data['Date'])
@@ -235,6 +349,18 @@ class PredictionModel():
     def reshape_for_keras(self, X):
         return np.expand_dims(X, axis=1)
     
+    def calculate_relevance_function(self, y, label):
+        hw_index = y[[label]].to_numpy()
+        hw_index = hw_index.reshape(hw_index.shape[0])
+
+        return create_relevance_function(hw_index)
+    
+    def sera_error_multioutput(self, y_true, y_pred, relevance):
+        sera = np.zeros(len(list(relevance.values())))
+        for i, label in enumerate(list(relevance.keys())):
+            sera[i], _, _ = compute_sera(y_true[[label]].to_numpy(), y_pred[:, i], relevance[label])
+        return sera
+    
 
     def train(self, len_pred):
         X = self.data[self.features]
@@ -243,7 +369,8 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         
-        
+        relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+        self.training_relevance_fs = relevance_fs
         if self.is_keras_model:
             X_train = self.reshape_for_keras(X_train)
             X_test = self.reshape_for_keras(X_test)
@@ -255,9 +382,12 @@ class PredictionModel():
         self.mae_training = mean_absolute_error(y_train, y_pred_train, multioutput="raw_values")
         self.mape_training = mean_absolute_percentage_error(y_train, y_pred_train, multioutput="raw_values")
         self.r2_training = r2_score(y_train, y_pred_train, multioutput="raw_values")
+        self.sera_training = self.sera_error_multioutput(y_train, y_pred_train, relevance_fs)
+
         self.mae_average_training = mean_absolute_error(y_train, y_pred_train)
         self.mape_average_training = mean_absolute_percentage_error(y_train, y_pred_train)
         self.r2_average_training = r2_score(y_train, y_pred_train)
+        self.sera_average_training = np.mean(self.sera_training)
         return y_train, y_pred_train
 
     def predict(self, len_pred):
@@ -267,6 +397,7 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         
+        relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
         if self.is_keras_model:
             X_test = self.reshape_for_keras(X_test)
             y_pred = self.regressor.predict(X_test)
@@ -275,17 +406,20 @@ class PredictionModel():
         self.mae_pred = mean_absolute_error(y_test, y_pred, multioutput="raw_values")
         self.mape_pred = mean_absolute_percentage_error(y_test, y_pred, multioutput="raw_values")
         self.r2_pred = r2_score(y_test, y_pred, multioutput="raw_values")
+        self.sera_pred = self.sera_error_multioutput(y_test, y_pred, relevance_fs)
+
         self.mae_average_pred = mean_absolute_error(y_test, y_pred)
         self.mape_average_pred = mean_absolute_percentage_error(y_test, y_pred)
         self.r2_average_pred = r2_score(y_test, y_pred)
+        self.sera_average_pred = np.mean(self.sera_pred)
 
         return y_test, y_pred
     
     def compile_keras_model(self, metrics=[]):
         if metrics:
-            self.regressor.compile(optimizer="adam", loss="mae", metrics=metrics)
+            self.regressor.compile(optimizer="adam", loss=self.custom_loss, metrics=metrics)
         else:
-            self.regressor.compile(optimizer="adam", loss="mae")
+            self.regressor.compile(optimizer="adam", loss=self.custom_loss)
         self.regressor.save_weights('model.h5')
     
     def train_predict(self, len_pred, plot=False,label_plot=None):
@@ -354,6 +488,8 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, stage] + list(self.mae_pred)+ [self.mae_average_pred]
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, stage] + list(self.mape_pred)+ [self.mape_average_pred]
+            elif metric == "sera":
+                return [self.name_regressor, self.season, metric, stage] + list(self.sera_pred)+ [self.sera_average_pred]
 
         elif stage=="training":
             if metric == "r2":
@@ -362,6 +498,8 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, stage] + list(self.mae_training)+ [self.mae_average_training]
             elif metric == "mape":
                 return [self.name_regressor, self.season, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
+            elif metric == "sera":
+                return [self.name_regressor, self.season, metric, stage] + list(self.sera_training)+ [self.sera_average_training]
         elif stage=="CV":
             if metric=="r2":
                 return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_r2_score) + [self.cv_r2_score_average]
@@ -369,6 +507,8 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mape_score) + [self.cv_mape_score_average]
             elif metric == "mae":
                 return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mae_score) + [self.cv_mae_score_average]
+            elif metric == "sera":
+                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_sera_score)+ [self.cv_sera_score_average]
         elif stage=="TSCV":
             if metric=="r2":
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_r2_score) + [self.tscv_r2_score_average]
@@ -376,41 +516,52 @@ class PredictionModel():
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mape_score) + [self.tscv_mape_score_average]
             elif metric == "mae":
                 return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mae_score) + [self.tscv_mae_score_average]
+            elif metric == "sera":
+                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_sera_score)+ [self.tscv_sera_score_average]
     
     def cross_validate(self, cv=10):
         r2_cv = []
         mape_cv = []
         mae_cv = []
-        if not self.is_keras_model:
-            for label in self.labels:
-                X, y = self.data[self.features], self.data[label]
-                r2_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='r2').mean())
-                mape_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_percentage_error').mean())
-                mae_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_error').mean())
-        else:
-            kf = KFold(n_splits=cv, shuffle=True, random_state=42)
-            X, y = self.data[self.features], self.data[self.labels]
-            train_sizes = []
-            for train_index, test_index in kf.split(X):
-                train_sizes.append(len(train_index))
-                train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+        sera_cv = []
+        # if not self.is_keras_model:
+        #     for label in self.labels:
+        #         X, y = self.data[self.features], self.data[label]
+        #         r2_cv.append(cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='r2').mean())
+        #         mape_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_percentage_error').mean())
+        #         mae_cv.append(-1*cross_val_score(self.cv_regressor, X, y, cv=cv, scoring='neg_mean_absolute_error').mean())
+        # else:
+        kf = KFold(n_splits=cv, shuffle=True, random_state=42)
+        X, y = self.data[self.features], self.data[self.labels]
+        train_sizes = []
+        for train_index, test_index in kf.split(X):
+            train_sizes.append(len(train_index))
+            train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
-                self.cv_regressor.load_weights('model.h5')
+                self.regressor.load_weights('model.h5')
                 self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
-                self.cv_regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+                self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
-                r2_cv.append(r2_score(y_test, pred, multioutput="raw_values")) 
-                mape_cv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
-                mae_cv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
-            
-            r2_folds = np.array(r2_cv)
-            mape_folds = np.array(mape_cv)
-            mae_folds = np.array(mae_cv)
-            weights = np.array(train_sizes)/np.sum(train_sizes)
-            r2_cv = np.dot(r2_folds.T,weights)
-            mape_cv = np.dot(mape_folds.T,weights)
-            mae_cv = np.dot(mae_folds.T,weights)
+            else:
+                self.regressor.fit(train_data, y_train)
+                pred = self.regressor.predict(test_data)
+            r2_cv.append(r2_score(y_test, pred, multioutput="raw_values")) 
+            mape_cv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
+            mae_cv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
+            sera_cv.append(self.sera_error_multioutput(y_test, pred, relevance_fs))
+        
+        r2_folds = np.array(r2_cv)
+        mape_folds = np.array(mape_cv)
+        mae_folds = np.array(mae_cv)
+        sera_folds = np.array(sera_cv)
+        weights = np.array(train_sizes)/np.sum(train_sizes)
+        r2_cv = np.dot(r2_folds.T,weights)
+        mape_cv = np.dot(mape_folds.T,weights)
+        mae_cv = np.dot(mae_folds.T,weights)
+        sera_cv = np.dot(sera_folds.T, weights)
 
         self.cv_r2_score = r2_cv
         self.cv_r2_score_average = np.mean(self.cv_r2_score)
@@ -418,11 +569,14 @@ class PredictionModel():
         self.cv_mape_score_average = np.mean(self.cv_mape_score)
         self.cv_mae_score = mae_cv
         self.cv_mae_score_average = np.mean(self.cv_mae_score)
+        self.cv_sera_score = sera_cv
+        self.cv_sera_score_average = np.mean(self.cv_sera_score)
     
     def timeseries_cross_validate(self, plot=False, label_plot=None):
         r2_tscv = []
         mape_tscv= []
         mae_tscv= []
+        sera_tscv = []
         tscv = TimeSeriesSplit(test_size=5)
         if label_plot:
             cv_dates_list = []
@@ -432,32 +586,39 @@ class PredictionModel():
             cv_ypreds_list = []
             idx_label = self.labels.index(label_plot)
 
-        if not self.is_keras_model:
-            for label in self.labels:
-                X, y = self.data[self.features], self.data[label]
-                r2_tscv_label = []
-                mape_tscv_label = []
-                mae_tscv_label = []
-                train_sizes = []
-                for train_index, test_index in tscv.split(X):
-                    train_sizes.append(len(train_index))
-                    train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
-                    self.cv_regressor.fit(train_data, y_train)
-                    pred = self.cv_regressor.predict(test_data)
+        # if not self.is_keras_model:
+        #     for label in self.labels:
+        #         X, y = self.data[self.features], self.data[label]
+        #         r2_tscv_label = []
+        #         mape_tscv_label = []
+        #         mae_tscv_label = []
+        #         sera_tscv_label = []
+        #         train_sizes = []
+        #         for train_index, test_index in tscv.split(X):
+        #             train_sizes.append(len(train_index))
+        #             train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+        #             relevance_fs = {label : self.calculate_relevance_function(y_train, label)}
+        #             self.cv_regressor.fit(train_data, y_train)
+        #             pred = self.cv_regressor.predict(test_data)
                     
-                    r2_tscv_label.append(r2_score(y_test, pred))
-                    mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
-                    mae_tscv_label.append(mean_absolute_error(y_test, pred))
-                weights = np.array(train_sizes)/np.sum(train_sizes)
-                r2_tscv.append(np.sum(weights*r2_tscv_label))
-                mape_tscv.append(np.sum(weights*mape_tscv_label))
-                mae_tscv.append(np.sum(weights*mae_tscv_label))
-        else:
-            X, y = self.data[self.features], self.data[self.labels]
-            train_sizes = []
-            for train_index, test_index in tscv.split(X):
-                train_sizes.append(len(train_index))
-                train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+        #             r2_tscv_label.append(r2_score(y_test, pred))
+        #             mape_tscv_label.append(mean_absolute_percentage_error(y_test, pred))
+        #             mae_tscv_label.append(mean_absolute_error(y_test, pred))
+        #             sera_tscv_label.append(self.sera_error_multioutput(y_test, pred, relevance_fs))
+
+        #         weights = np.array(train_sizes)/np.sum(train_sizes)
+        #         r2_tscv.append(np.sum(weights*r2_tscv_label))
+        #         mape_tscv.append(np.sum(weights*mape_tscv_label))
+        #         mae_tscv.append(np.sum(weights*mae_tscv_label))
+        #         sera_tscv.append(np.sum(weights*sera_tscv_label))
+        # else:
+        X, y = self.data[self.features], self.data[self.labels]
+        train_sizes = []
+        for train_index, test_index in tscv.split(X):
+            train_sizes.append(len(train_index))
+            train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
+            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
                 self.regressor.load_weights('model.h5')
@@ -465,33 +626,41 @@ class PredictionModel():
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
                 ytrain_pred = self.regressor.predict(X_train)
-                len_data = len(train_index) + len(test_index)
-                dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
-                train_dates, test_dates = dates[:len(train_index)], dates[len(train_index):]
-                if plot:
-                    self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
-                if label_plot:
-                    cv_dates_list.append((train_dates, test_dates))
-                    cv_ytrains_list.append(y_train.iloc[:, idx_label].values) 
-                    cv_ypredtrains_list.append(ytrain_pred[:, idx_label])
-                    cv_ytests_list.append(y_test[self.labels[idx_label]].values)
-                    cv_ypreds_list.append(pred[:, idx_label])
-                r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
-                mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
-                mae_tscv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
+            else:
+                self.regressor.fit(train_data, y_train)
+                pred = self.regressor.predict(test_data)
+                ytrain_pred = self.regressor.predict(train_data)
             
-            r2_folds = np.array(r2_tscv)
-            mape_folds = np.array(mape_tscv)
-            mae_folds = np.array(mae_tscv)
-            weights = np.array(train_sizes)/np.sum(train_sizes)
-            r2_tscv = np.dot(r2_folds.T,weights)
-            mape_tscv = np.dot(mape_folds.T,weights)
-            mae_tscv = np.dot(mae_folds.T,weights)
-
+            len_data = len(train_index) + len(test_index)
+            dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
+            train_dates, test_dates = dates[:len(train_index)], dates[len(train_index):]
+            if plot:
+                self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
+            if label_plot:
+                cv_dates_list.append((train_dates, test_dates))
+                cv_ytrains_list.append(y_train.iloc[:, idx_label].values) 
+                cv_ypredtrains_list.append(ytrain_pred[:, idx_label])
+                cv_ytests_list.append(y_test[self.labels[idx_label]].values)
+                cv_ypreds_list.append(pred[:, idx_label])
+            r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
+            mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
+            mae_tscv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
+            sera_tscv.append(self.sera_error_multioutput(y_test, pred, relevance_fs))
+        
+        r2_folds = np.array(r2_tscv)
+        mape_folds = np.array(mape_tscv)
+        mae_folds = np.array(mae_tscv)
+        sera_folds = np.array(sera_tscv)
+        weights = np.array(train_sizes)/np.sum(train_sizes)
+        r2_tscv = np.dot(r2_folds.T,weights)
+        mape_tscv = np.dot(mape_folds.T,weights)
+        mae_tscv = np.dot(mae_folds.T,weights)
+        sera_tscv = np.dot(sera_folds.T, weights)
         if label_plot:
             r2_folds = r2_folds[:, idx_label]
             mape_folds = mape_folds[:, idx_label]
             mae_folds = mae_folds[:, idx_label]
+            sera_folds = sera_folds[:, idx_label]
             self.plot_cv_folds_for_label(
                 cv_dates_list,
                 cv_ytrains_list,
@@ -501,7 +670,8 @@ class PredictionModel():
                 label=self.labels[idx_label],
                 r2_per_fold=r2_folds,
                 mape_per_fold=mape_folds,
-                mae_per_fold=mae_folds
+                mae_per_fold=mae_folds,
+                sera_per_fold=sera_folds
             )
         self.tscv_r2_score = r2_tscv
         self.tscv_r2_score_average = np.mean(r2_tscv)
@@ -509,9 +679,11 @@ class PredictionModel():
         self.tscv_mape_score_average = np.mean(mape_tscv)
         self.tscv_mae_score = mae_tscv
         self.tscv_mae_score_average = np.mean(mae_tscv)
+        self.tscv_sera_score = sera_tscv
+        self.tscv_sera_score_average = np.mean(sera_tscv)
 
     
-    def plot_cv_folds_for_label(self, dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list, label, r2_per_fold=None, mape_per_fold=None, mae_per_fold=None):
+    def plot_cv_folds_for_label(self, dates_list, ytrains_list, ypredtrains_list, ytests_list, ypreds_list, label, r2_per_fold=None, mape_per_fold=None, mae_per_fold=None, sera_per_fold=None):
         n_folds = len(dates_list)
         last_train_dates, last_test_dates = dates_list[-1]
         x_min = last_train_dates.min()
@@ -555,11 +727,12 @@ class PredictionModel():
             r2_text = f"R²: {r2_per_fold[fold_idx]:.3f}" if r2_per_fold is not None else ""
             mae_text = f"MAE: {mae_per_fold[fold_idx]:.3f}" if mae_per_fold is not None else ""
             mape_text = f"MAPE: {mape_per_fold[fold_idx]*100:.2f}%" if mape_per_fold is not None else ""
+            sera_text = f"SERA: {sera_per_fold[fold_idx]:.3f}" if sera_per_fold is not None else ""
 
             # Add metrics to title
             title = f"TSCV Fold {fold_idx + 1} Predictions for {label}"
             if r2_text or mape_text or mae_text:
-                title += f"\n{r2_text} | {mape_text} | {mae_text}"
+                title += f"\n{r2_text} | {mape_text} | {mae_text} | {sera_text}"
 
             ax.set_title(title)
             ax.set_xlabel("Date")
@@ -709,11 +882,11 @@ class PredictionExperiment():
     One PredictionExperiment correspond to one id experiment. It contains multiple results inside only bc of different metrics 
     """
     
-    def __init__(self, data, labels, regressors, name_regressors, len_pred, data_id, frequency="bimonthly"):
+    def __init__(self, data, labels, regressors, name_regressors, len_pred, data_id, frequency="bimonthly", loss_fn="mae"):
         self.seasons = data.keys()
         self.data_id = data_id
         self.labels = labels
-        self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
+        self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name, loss_fn=loss_fn) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
         self.len_pred = len_pred
 
         self.num_results = 0
@@ -722,6 +895,7 @@ class PredictionExperiment():
     def execute_experiment(self, plot=False, label_plot=None):
         for season, models in self.models.items():
             for model in models:
+                print("Train predicting ", season, model.name_regressor)
                 model.train_predict(self.len_pred, plot=plot, label_plot=label_plot)
 
     def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
