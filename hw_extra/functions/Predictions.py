@@ -289,19 +289,43 @@ def piecewise_linear_phi(y, bounds):
         )
     )
 
+def piecewise_linear_phi_2(y, bounds, initial_weight=0.1):
+    x1, x2, x3, x4 = tf.unstack(bounds)
+    # iqr = (x3-x2)
+    # x1, x2, x3, x4, x5, x6, x7 = x1, x2, x2+iqr/4, x2+ iqr/2, x2 + iqr*0.75, x3, x4
+    y1, y2, y3, y4 = initial_weight, initial_weight, 1, 1
+    return tf.where(
+        y <= x1, y1,
+        tf.where(
+            y <= x2,  y2 + (y2-y1)/(x2-x1)*(y-x2),
+            tf.where(
+                y <= x3, y3 + (y3-y2)/(x3-x2)*(y-x3),
+                tf.where(
+                    y <= x4, tf.ones_like(y), tf.ones_like(y)
+                    )
+                )
+            )
+        )
+
 class SERA(tf.keras.losses.Loss):
-    def __init__(self, bounds, T=100, name="sera_loss"):
+    def __init__(self, bounds, T=100, name="sera_loss", fn='piecewise1', initial_weight=0.1):
         super().__init__(name=name)
         self.bounds = tf.constant(bounds, dtype=tf.float32)
         self.T = T
         self.thresholds = tf.linspace(0.0, 1.0, T + 1)
+        self.fn = fn
+        self.initial_w = initial_weight
         # self.relevance = relevance_fn
 
     def call(self, y_true, y_pred):
         y_true = tf.reshape(y_true, [-1])
         y_pred = tf.reshape(y_pred, [-1])
         errors = tf.square(y_pred - y_true)
-        relevance = piecewise_linear_phi(y_true, self.bounds)
+        if self.fn == 'piecewise1':
+            relevance = piecewise_linear_phi(y_true, self.bounds)
+        elif self.fn == 'piecewise2':
+            relevance = piecewise_linear_phi_2(y_true, self.bounds, initial_weight=self.initial_w)
+            
 
         total = tf.constant(0.0, dtype=tf.float32)
         for i in range(self.T + 1):
@@ -317,15 +341,17 @@ class SERA(tf.keras.losses.Loss):
 ### PREDICTION
 
 class PredictionModel():
-    def __init__(self, data, season, labels, regressor, name_regressor=None, frequency="bimonthly", loss_fn="mae"):
+    def __init__(self, data, season, labels, regressor, name_regressor=None, frequency="bimonthly", loss_fn="mae", whole_year=False):
         self.labels = labels
         self.season = season
         self.name_regressor = name_regressor
+
+        self.whole_year = whole_year
         
         self.is_keras_model = hasattr(regressor, "fit") and hasattr(regressor, "predict") and hasattr(regressor, "compile")
         self.data, self.features = self.form_matrix(data)
         if self.is_keras_model:
-            self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+            self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
             self.custom_loss = loss_fn
         if len(self.labels) > 1 and not self.is_keras_model:
             self.regressor = MultiOutputRegressor(regressor)
@@ -368,7 +394,7 @@ class PredictionModel():
         
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
-        
+
         relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
         self.training_relevance_fs = relevance_fs
         if self.is_keras_model:
@@ -428,7 +454,7 @@ class PredictionModel():
         ytrains, ypredtrains = self.train(len_pred)
         ytests, ypreds = self.predict(len_pred)
         self.cross_validate()
-        self.timeseries_cross_validate(plot=plot, label_plot=label_plot)
+        self.timeseries_cross_validate(len_pred, plot=plot, label_plot=label_plot)
         # if plot:
         #     self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
 
@@ -542,7 +568,7 @@ class PredictionModel():
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
                 self.regressor.load_weights('model.h5')
-                self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+                self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
             else:
@@ -572,12 +598,12 @@ class PredictionModel():
         self.cv_sera_score = sera_cv
         self.cv_sera_score_average = np.mean(self.cv_sera_score)
     
-    def timeseries_cross_validate(self, plot=False, label_plot=None):
+    def timeseries_cross_validate(self, len_pred, plot=False, label_plot=None):
         r2_tscv = []
         mape_tscv= []
         mae_tscv= []
         sera_tscv = []
-        tscv = TimeSeriesSplit(test_size=5)
+        tscv = TimeSeriesSplit(test_size=len_pred)
         if label_plot:
             cv_dates_list = []
             cv_ytrains_list = []
@@ -622,7 +648,7 @@ class PredictionModel():
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
                 self.regressor.load_weights('model.h5')
-                self.early_stopping = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+                self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
                 ytrain_pred = self.regressor.predict(X_train)
@@ -632,7 +658,10 @@ class PredictionModel():
                 ytrain_pred = self.regressor.predict(train_data)
             
             len_data = len(train_index) + len(test_index)
-            dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
+            if self.whole_year:
+                dates = pd.date_range(pd.to_datetime(f"1972-01"),periods=len_data,freq=pd.offsets.MonthBegin(1))
+            else:
+                dates = pd.date_range(pd.to_datetime(f"1972-{self.season}"),periods=len_data,freq=pd.offsets.YearBegin(1))
             train_dates, test_dates = dates[:len(train_index)], dates[len(train_index):]
             if plot:
                 self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
@@ -882,11 +911,11 @@ class PredictionExperiment():
     One PredictionExperiment correspond to one id experiment. It contains multiple results inside only bc of different metrics 
     """
     
-    def __init__(self, data, labels, regressors, name_regressors, len_pred, data_id, frequency="bimonthly", loss_fn="mae"):
+    def __init__(self, data, labels, regressors, name_regressors, len_pred, data_id, frequency="bimonthly", loss_fn="mae", whole_year=False):
         self.seasons = data.keys()
         self.data_id = data_id
         self.labels = labels
-        self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name, loss_fn=loss_fn) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
+        self.models = {season: [PredictionModel(data[season], season, labels, regressor, name_regressor=name, loss_fn=loss_fn, whole_year=whole_year) for regressor,name in zip(regressors, name_regressors)] for season in self.seasons}
         self.len_pred = len_pred
 
         self.num_results = 0

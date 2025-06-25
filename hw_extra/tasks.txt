@@ -100,3 +100,17 @@ Tasks 13/06:
     Check sensibility of better relevance functions:
         - Check the relevance function per season per index and compare them visually
         - Develop maybe the inverse distribution relevance function and compare
+
+Tasks 19/06:
+    Finish predictors PRs:
+        - Vaguada ready
+        - advection need to combine files from two variables aswell. From intermediate layers seems that does not have any data for 850 wind.
+          Monthly data we have on raw, should we copy them to intermediate?? or create any function that looks to raw after now founding in intermediate?
+          This in order to respect kedro
+    Build anually model for imbalanced regression
+
+
+Tasks 24/06:
+    Cluster send script for monthly variables for advection (or all that may need)
+    Build custom loss for less complex supervised algorithms
+    

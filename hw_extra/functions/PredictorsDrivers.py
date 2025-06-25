@@ -246,6 +246,11 @@ class Predictor():
                 for col in list(predictor.columns):
                     df_new[f"{name}-{col}"] = predictor[col]
             new_exp = {1: df_new}
+        elif self.frequency=="yearly":
+            new_exp = experiment.copy()
+            for name, predictor in zip(names, predictors):
+                for col in list(predictor.columns):
+                    new_exp[f"{name}-{col}"] = predictor[col]
         self.data_experiments[self.num_experiments] = data + ["-".join(names)]
         self.experiments[self.num_experiments] = new_exp
 
@@ -269,6 +274,11 @@ class Predictor():
                 for col in list(df_labels.columns):
                     df_new[col] = df_labels[col]
                 new_exp[season] = df_new
+        elif self.frequency == "yearly":
+            new_exp = experiment.copy()
+            for col in list(df_labels.columns):
+                new_exp[col] = df_labels[col]
+    
         self.data_experiments[self.num_experiments] = data 
         self.experiments[self.num_experiments] = new_exp
 
