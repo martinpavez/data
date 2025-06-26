@@ -9,6 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from tensorflow_addons.metrics import RSquare
 
 import matplotlib.pyplot as plt
+import xgboost as xgb
 import numpy as np
 import seaborn as sns
 
@@ -26,6 +27,8 @@ import tensorflow.keras.backend as K
 
 from scipy.interpolate import PchipInterpolator
 from statsmodels.stats.stattools import medcouple
+from sklearn.base import BaseEstimator, RegressorMixin
+
 
 simplefilter("ignore", category=ConvergenceWarning)
 
@@ -262,6 +265,32 @@ def compute_sera(y_true, y_pred, relevance_fn, step=0.01):
     sera_score = np.trapz(ser_t, t_values)
     return sera_score, t_values, ser_t
 
+
+# TensorFlow-compatible SERA metric wrapper
+def compute_sera_tensor(y_true, y_pred, relevance_fn, step=0.01):
+    """
+    TensorFlow-compatible version of SERA for use as a metric in Keras.
+    Assumes y_true and y_pred are 1D tensors.
+    `relevance_fn` must be a NumPy function; we'll wrap it using tf.numpy_function.
+    """
+    def sera_np(y_true_np, y_pred_np):
+        t_values = np.arange(0, 1 + step, step)
+        ser_t = []
+        rel_true = relevance_fn(y_true_np)
+
+        for t in t_values:
+            indices = np.where(rel_true >= t)[0]
+            if len(indices) == 0:
+                ser_t.append(0.0)
+                continue
+            errors = (y_pred_np[indices] - y_true_np[indices]) ** 2
+            ser_t.append(np.mean(errors))
+
+        sera_score = np.trapz(ser_t, t_values)
+        return np.float32(sera_score)
+
+    return tf.numpy_function(sera_np, [y_true, y_pred], tf.float32)
+
 def piecewise_linear_phi(y, bounds):
     x1, x2, x3, x4 = tf.unstack(bounds)
     iqr = (x3-x2)
@@ -289,12 +318,12 @@ def piecewise_linear_phi(y, bounds):
         )
     )
 
-def piecewise_linear_phi_2(y, bounds, initial_weight=0.1):
+def piecewise_linear_phi_2(bounds, initial_weight=0.1):
     x1, x2, x3, x4 = tf.unstack(bounds)
     # iqr = (x3-x2)
     # x1, x2, x3, x4, x5, x6, x7 = x1, x2, x2+iqr/4, x2+ iqr/2, x2 + iqr*0.75, x3, x4
     y1, y2, y3, y4 = initial_weight, initial_weight, 1, 1
-    return tf.where(
+    return lambda y: tf.where(
         y <= x1, y1,
         tf.where(
             y <= x2,  y2 + (y2-y1)/(x2-x1)*(y-x2),
@@ -307,10 +336,76 @@ def piecewise_linear_phi_2(y, bounds, initial_weight=0.1):
             )
         )
 
+def piecewise_linear_phi_np(bounds, initial_weight=0.1):
+    x1, x2, x3, x4 = bounds
+    # iqr = (x3-x2)
+    # x1, x2, x3, x4, x5, x6, x7 = x1, x2, x2+iqr/4, x2+ iqr/2, x2 + iqr*0.75, x3, x4
+    y1, y2, y3, y4 = initial_weight, initial_weight, 1, 1
+    return lambda y: np.where(
+        y <= x1, y1,
+        np.where(
+            y <= x2,  y2 + (y2-y1)/(x2-x1)*(y-x2),
+            np.where(
+                y <= x3, y3 + (y3-y2)/(x3-x2)*(y-x3),
+                np.where(
+                    y <= x4, np.ones_like(y), np.ones_like(y)
+                    )
+                )
+            )
+        )
+
+def sera_first_deriv(trues, preds, phi, step=0.001):
+    """
+    Compute the first derivative (gradient) of the SERA loss.
+    """
+    th = np.arange(0, 1 + step, step)
+    n = len(trues)
+
+    # Compute error contribution over thresholds
+    errors = np.array([
+        [(preds[i] - trues[i]) if phi[i] >= t else 0.0 for t in th]
+        for i in range(n)
+    ])
+
+    # Trapezoidal integration
+    areas = step * 0.5 * (errors[:, :-1] + errors[:, 1:])
+    y_deriv = 2 * np.sum(areas, axis=1)
+
+    return y_deriv
+
+def sera_second_deriv(trues, phi, step=0.001):
+    """
+    Compute the second derivative (Hessian) of the SERA loss.
+    """
+    th = np.arange(0, 1 + step, step)
+    n = len(trues)
+
+    # Binary mask over thresholds
+    errors = np.array([
+        [1.0 if phi[i] >= t else 0.0 for t in th]
+        for i in range(n)
+    ])
+
+    # Trapezoidal integration
+    areas = step * 0.5 * (errors[:, :-1] + errors[:, 1:])
+    y_deriv = 2 * np.sum(areas, axis=1)
+
+    return y_deriv
+
+def sera_objective(phi_fn, step=0.001):
+    def loss(predt: np.ndarray, dtrain: xgb.DMatrix):
+        y = dtrain.get_label()
+        phi_vals = phi_fn(y)
+        grad = sera_first_deriv(y, predt, phi_vals, step=step)
+        hess = sera_second_deriv(y, phi_vals, step=step)
+        return grad, hess
+    return loss
+
 class SERA(tf.keras.losses.Loss):
     def __init__(self, bounds, T=100, name="sera_loss", fn='piecewise1', initial_weight=0.1):
         super().__init__(name=name)
         self.bounds = tf.constant(bounds, dtype=tf.float32)
+        self.bounds_string = "|".join(list(map(str,bounds)))
         self.T = T
         self.thresholds = tf.linspace(0.0, 1.0, T + 1)
         self.fn = fn
@@ -318,13 +413,15 @@ class SERA(tf.keras.losses.Loss):
         # self.relevance = relevance_fn
 
     def call(self, y_true, y_pred):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
         y_true = tf.reshape(y_true, [-1])
         y_pred = tf.reshape(y_pred, [-1])
         errors = tf.square(y_pred - y_true)
         if self.fn == 'piecewise1':
-            relevance = piecewise_linear_phi(y_true, self.bounds)
+            relevance = piecewise_linear_phi(self.bounds)(y_true)
         elif self.fn == 'piecewise2':
-            relevance = piecewise_linear_phi_2(y_true, self.bounds, initial_weight=self.initial_w)
+            relevance = piecewise_linear_phi_2(self.bounds, initial_weight=self.initial_w)(y_true)
             
 
         total = tf.constant(0.0, dtype=tf.float32)
@@ -338,6 +435,91 @@ class SERA(tf.keras.losses.Loss):
 
         return total / tf.cast(self.T, tf.float32)
 
+
+### XGBOOST SERA
+
+class XGBCustomObjective(BaseEstimator, RegressorMixin):
+    """
+    Wrapper class to make XGBoost with custom objectives compatible with sklearn.
+    This is needed for MultiOutputRegressor.
+    """
+    def __init__(self, objective_func=None, random_state=42, n_estimators=15, learning_rate=0.1, max_depth=6, subsample=0.8, colsample_bytree=0.8, **kwargs):
+        self.objective_func = objective_func
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.subsample = subsample
+        self.colsample_bytree = colsample_bytree
+        self.kwargs = kwargs
+        self.model = None
+        
+    def fit(self, X, y):
+        """Fit the model with custom objective."""
+        # Create DMatrix
+        dtrain = xgb.DMatrix(X, label=y)
+        
+        # Set up parameters using your specified values
+        params = {
+            'max_depth': self.max_depth,
+            'eta': self.learning_rate,  # learning_rate
+            'subsample': self.subsample,
+            'colsample_bytree': self.colsample_bytree,
+            'seed': self.random_state,  # random_state
+            'disable_default_eval_metric': 1 if self.objective_func else 0
+        }
+        params.update(self.kwargs)
+        
+        if self.objective_func:
+            # Train with custom objective
+            self.model = xgb.train(
+                params=params,
+                dtrain=dtrain,
+                num_boost_round=self.n_estimators,
+                obj=self.objective_func,
+                verbose_eval=False
+            )
+        else:
+            # Train with standard objective
+            params['objective'] = 'reg:squarederror'
+            del params['disable_default_eval_metric']
+            self.model = xgb.train(
+                params=params,
+                dtrain=dtrain,
+                num_boost_round=self.n_estimators,
+                verbose_eval=False
+            )
+        
+        return self
+    
+    def predict(self, X):
+        """Make predictions."""
+        dtest = xgb.DMatrix(X)
+        return self.model.predict(dtest)
+    
+    def get_params(self, deep=True):
+        """Get parameters for this estimator (required for sklearn compatibility)."""
+        params = {
+            'objective_func': self.objective_func,
+            'random_state': self.random_state,
+            'n_estimators': self.n_estimators,
+            'learning_rate': self.learning_rate,
+            'max_depth': self.max_depth,
+            'subsample': self.subsample,
+            'colsample_bytree': self.colsample_bytree
+        }
+        params.update(self.kwargs)
+        return params
+    
+    def set_params(self, **params):
+        """Set parameters for this estimator (required for sklearn compatibility)."""
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                self.kwargs[key] = value
+        return self
+    
+    
 ### PREDICTION
 
 class PredictionModel():
@@ -352,7 +534,7 @@ class PredictionModel():
         self.data, self.features = self.form_matrix(data)
         if self.is_keras_model:
             self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
-            self.custom_loss = loss_fn
+        self.custom_loss = loss_fn
         if len(self.labels) > 1 and not self.is_keras_model:
             self.regressor = MultiOutputRegressor(regressor)
         else:
@@ -384,7 +566,10 @@ class PredictionModel():
     def sera_error_multioutput(self, y_true, y_pred, relevance):
         sera = np.zeros(len(list(relevance.values())))
         for i, label in enumerate(list(relevance.keys())):
-            sera[i], _, _ = compute_sera(y_true[[label]].to_numpy(), y_pred[:, i], relevance[label])
+            if self.is_keras_model:
+                sera[i] = self.custom_loss.call(y_true, y_pred)
+            else:
+                sera[i], _, _ = compute_sera(y_true[[label]].to_numpy(), y_pred[:, i], relevance[label])
         return sera
     
 
@@ -395,7 +580,12 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
 
-        relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+        if isinstance(self.custom_loss, SERA):
+            relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
+        else:
+            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+        if not self.is_keras_model:
+            relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         self.training_relevance_fs = relevance_fs
         if self.is_keras_model:
             X_train = self.reshape_for_keras(X_train)
@@ -423,7 +613,12 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         
-        relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+        if isinstance(self.custom_loss, SERA):
+            relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
+        else:
+            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+        if not self.is_keras_model:
+            relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         if self.is_keras_model:
             X_test = self.reshape_for_keras(X_test)
             y_pred = self.regressor.predict(X_test)
@@ -509,41 +704,41 @@ class PredictionModel():
     def get_metric(self, metric, stage="prediction"):
         if stage == "prediction":
             if metric == "r2":
-                return [self.name_regressor, self.season, metric, stage] + list(self.r2_pred) + [self.r2_average_pred]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.r2_pred) + [self.r2_average_pred]
             elif metric == "mae":
-                return [self.name_regressor, self.season, metric, stage] + list(self.mae_pred)+ [self.mae_average_pred]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.mae_pred)+ [self.mae_average_pred]
             elif metric == "mape":
-                return [self.name_regressor, self.season, metric, stage] + list(self.mape_pred)+ [self.mape_average_pred]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.mape_pred)+ [self.mape_average_pred]
             elif metric == "sera":
-                return [self.name_regressor, self.season, metric, stage] + list(self.sera_pred)+ [self.sera_average_pred]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.sera_pred)+ [self.sera_average_pred]
 
         elif stage=="training":
             if metric == "r2":
-                return [self.name_regressor, self.season, metric, stage] + list(self.r2_training)+ [self.r2_average_training]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.r2_training)+ [self.r2_average_training]
             elif metric == "mae":
-                return [self.name_regressor, self.season, metric, stage] + list(self.mae_training)+ [self.mae_average_training]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.mae_training)+ [self.mae_average_training]
             elif metric == "mape":
-                return [self.name_regressor, self.season, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.mape_training)+ [self.mape_average_training]
             elif metric == "sera":
-                return [self.name_regressor, self.season, metric, stage] + list(self.sera_training)+ [self.sera_average_training]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, stage] + list(self.sera_training)+ [self.sera_average_training]
         elif stage=="CV":
             if metric=="r2":
-                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_r2_score) + [self.cv_r2_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "CV"] + list(self.cv_r2_score) + [self.cv_r2_score_average]
             elif metric == "mape":
-                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mape_score) + [self.cv_mape_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "CV"] + list(self.cv_mape_score) + [self.cv_mape_score_average]
             elif metric == "mae":
-                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_mae_score) + [self.cv_mae_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "CV"] + list(self.cv_mae_score) + [self.cv_mae_score_average]
             elif metric == "sera":
-                return [self.name_regressor, self.season, metric, "CV"] + list(self.cv_sera_score)+ [self.cv_sera_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "CV"] + list(self.cv_sera_score)+ [self.cv_sera_score_average]
         elif stage=="TSCV":
             if metric=="r2":
-                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_r2_score) + [self.tscv_r2_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "TSCV"] + list(self.tscv_r2_score) + [self.tscv_r2_score_average]
             elif metric == "mape":
-                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mape_score) + [self.tscv_mape_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "TSCV"] + list(self.tscv_mape_score) + [self.tscv_mape_score_average]
             elif metric == "mae":
-                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_mae_score) + [self.tscv_mae_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "TSCV"] + list(self.tscv_mae_score) + [self.tscv_mae_score_average]
             elif metric == "sera":
-                return [self.name_regressor, self.season, metric, "TSCV"] + list(self.tscv_sera_score)+ [self.tscv_sera_score_average]
+                return [self.name_regressor, self.season, self.custom_loss.bounds_string, self.custom_loss.initial_w, metric, "TSCV"] + list(self.tscv_sera_score)+ [self.tscv_sera_score_average]
     
     def cross_validate(self, cv=10):
         r2_cv = []
@@ -563,7 +758,12 @@ class PredictionModel():
         for train_index, test_index in kf.split(X):
             train_sizes.append(len(train_index))
             train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
-            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if isinstance(self.custom_loss, SERA):
+                relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
+            else:
+                relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if not self.is_keras_model:
+                relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
@@ -643,7 +843,12 @@ class PredictionModel():
         for train_index, test_index in tscv.split(X):
             train_sizes.append(len(train_index))
             train_data, test_data, y_train, y_test = X.iloc[train_index], X.iloc[test_index], y.iloc[train_index], y.iloc[test_index]
-            relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if isinstance(self.custom_loss, SERA):
+                relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
+            else:
+                relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
+            if not self.is_keras_model:
+                relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
@@ -919,7 +1124,7 @@ class PredictionExperiment():
         self.len_pred = len_pred
 
         self.num_results = 0
-        self.results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
+        self.results = pd.DataFrame(columns=["Model","Season","Bounds","I_w", "Metric", "Stage"]+ self.labels + ["Average"])
         
     def execute_experiment(self, plot=False, label_plot=None):
         for season, models in self.models.items():
@@ -928,7 +1133,7 @@ class PredictionExperiment():
                 model.train_predict(self.len_pred, plot=plot, label_plot=label_plot)
 
     def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
-        results = pd.DataFrame(columns=["Model", "Season", "Metric", "Stage"]+ self.labels + ["Average"])
+        results = pd.DataFrame(columns=["Model","Season","Bounds","I_w", "Metric", "Stage"]+ self.labels + ["Average"])
         for season in self.seasons:
             for model in self.models[season]:
                 results.loc[len(results.index)] = model.get_metric(metric, stage)
@@ -966,3 +1171,4 @@ class PredictionExperiment():
                 elif method=="nn":
                     mod.nn_feature_importance()
                 return
+            

@@ -111,6 +111,12 @@ Tasks 19/06:
 
 
 Tasks 24/06:
-    Cluster send script for monthly variables for advection (or all that may need)
     Build custom loss for less complex supervised algorithms
-    
+    Assure same SERA is calculated for each model as the optimized one (even for xgb)
+    run again experiment with better sera (maybe try several initial weights), include xgb
+    Run wholeyear experiments with custom xgb
+
+Tasks 26/06:
+    Cluster send script for monthly variables for advection (or all that may need)
+    Write conclusions of study relevance fns, xgb optimization, some SERA visualizations.
+    Reconstruct or deconstruct models in order to compare whole year vs by month predictions. 
