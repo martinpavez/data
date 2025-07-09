@@ -117,6 +117,25 @@ Tasks 24/06:
     Run wholeyear experiments with custom xgb
 
 Tasks 26/06:
-    Cluster send script for monthly variables for advection (or all that may need)
+    MISSING******Cluster send script for monthly variables for advection (or all that may need)
     Write conclusions of study relevance fns, xgb optimization, some SERA visualizations.
     Reconstruct or deconstruct models in order to compare whole year vs by month predictions. 
+    Inclinacion solar para feature mes
+
+Tasks 30/06:
+    Finish review PR and update my PR
+    Reconstruct or deconstruct models in order to compare whole year vs by month predictions. 
+    Inclinacion solar para feature mes or cosine/sine for cyclic feature each month
+
+Tasks 31/06:
+    Review every experiment to discuss their features (check bad and good exps)
+    hopefully check my drivers vs cluster drivers
+
+Finish year predictions (think 0.1 is half missing)
+
+Reu 03/07:
+    Remember december mistake, was locally and 10mean does not look that imbalanced.
+    Remember last year results were without month feature
+
+
+CMiP6

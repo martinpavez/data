@@ -18,10 +18,8 @@ from xgboost import plot_importance
 from warnings import simplefilter
 from sklearn.exceptions import ConvergenceWarning
 import tensorflow as tf
-import shap
 tf.random.set_seed(42)
 import keras
-import copy
 from sklearn.model_selection import KFold
 import tensorflow.keras.backend as K
 
@@ -29,7 +27,7 @@ from scipy.interpolate import PchipInterpolator
 from statsmodels.stats.stattools import medcouple
 from sklearn.base import BaseEstimator, RegressorMixin
 
-
+import time
 simplefilter("ignore", category=ConvergenceWarning)
 
 
@@ -48,17 +46,20 @@ def get_info_experiment(id_data, metadata_exp_path, metadata_index_path, extra_i
     
     return pd.concat([metadata_indices.loc[my_indices],metadata_extra.loc[extra_indices]], axis=0)
 
-def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise", indices_of_interest=["HWN", "HWF", "HWD", "HWM", "HWA", "Average"]):
+def summarize_best_results_by_index(results, metadata, metric="r2", stage="prediction", top_n=1, exclude_model="GPR-rbf-noise", indices_of_interest=["HWN", "HWF", "HWD", "HWM", "HWA", "Average"], sera=False):
 
+    if sera:
+        unique_columns_by_model = ["model", "season", "id_data", "Bounds","I_w", "index"]
+    else:
+        unique_columns_by_model = ["model", "season", "id_data", "index"]
     # Filter for prediction stage based on metric
     # prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric) & (results["model"]!= "Linear")]
     prediction_results = results[(results["stage"] == stage) & (results["metric"] == metric)]
 
 
     # Find the top N best values per index (maximize for r2 and cv_r2, minimize for mape)
-    best_results = prediction_results.set_index(["model", "season", "id_data"])[indices_of_interest].stack().reset_index()
-    best_results.columns = ["model", "season", "id_data", "index", "best_value"]
-    
+    best_results = prediction_results.set_index(unique_columns_by_model[:-1])[indices_of_interest].stack().reset_index()
+    best_results.columns = unique_columns_by_model + ["best_value"]
     if metric =="r2":
         best_results = best_results.groupby("index").apply(lambda x: x.nlargest(top_n, "best_value")).reset_index(drop=True)
     else:  # metric == "mape"
@@ -67,11 +68,11 @@ def summarize_best_results_by_index(results, metadata, metric="r2", stage="predi
     # Get corresponding training values
     if metric in ["r2", "mape", "mae", "sera"] and stage not in ["CV","TSCV"]:
         training_results = results[(results["stage"] == "training") & (results["metric"] == metric) & results["id_data"].isin(best_results["id_data"])]
-        training_results = training_results.set_index(["model", "season", "id_data"])[indices_of_interest].stack().reset_index()
-        training_results.columns = ["model", "season", "id_data", "index", "training_value"]
+        training_results = training_results.set_index(unique_columns_by_model[:-1])[indices_of_interest].stack().reset_index()
+        training_results.columns = unique_columns_by_model + ["training_value"]
 
         # Merge best prediction results with training values
-        summary = best_results.merge(training_results, on=["model", "season", "id_data", "index"], how="left")
+        summary = best_results.merge(training_results, on=unique_columns_by_model, how="left")
 
     else:
         summary = best_results
@@ -584,13 +585,13 @@ class PredictionModel():
             relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         else:
             relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
-        if not self.is_keras_model:
+        if "CXGB" in self.name_regressor:
             relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         self.training_relevance_fs = relevance_fs
         if self.is_keras_model:
             X_train = self.reshape_for_keras(X_train)
             X_test = self.reshape_for_keras(X_test)
-            self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=1, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
+            self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
             y_pred_train = self.regressor.predict(X_train)
         else:
             self.regressor.fit(X_train, y_train)
@@ -617,7 +618,7 @@ class PredictionModel():
             relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         else:
             relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
-        if not self.is_keras_model:
+        if "CXGB" in self.name_regressor:
             relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
         if self.is_keras_model:
             X_test = self.reshape_for_keras(X_test)
@@ -641,7 +642,7 @@ class PredictionModel():
             self.regressor.compile(optimizer="adam", loss=self.custom_loss, metrics=metrics)
         else:
             self.regressor.compile(optimizer="adam", loss=self.custom_loss)
-        self.regressor.save_weights('model.h5')
+        self.regressor.save_weights('model_init.h5')
     
     def train_predict(self, len_pred, plot=False,label_plot=None):
         if self.is_keras_model:
@@ -654,6 +655,14 @@ class PredictionModel():
         #     self.plot_predictions(len_pred, ytrains, ypredtrains, ytests, ypreds)
 
     def plot_predictions(self, dates, len_pred, ytrains, ypredtrains, ytests, ypreds):
+        if isinstance(ytrains, pd.DataFrame):
+            ytrains_np = ytrains.to_numpy()
+        else:
+            ytrains_np = ytrains
+        if isinstance(ytests, pd.DataFrame):
+            ytests_np = ytests.to_numpy()
+        else:
+            ytests_np = ytests
         fig, axs = plt.subplots(len(self.labels), 1, figsize=(25,15))
         train_dates, test_dates = dates[:-len_pred], dates[-len_pred:]
 
@@ -661,7 +670,7 @@ class PredictionModel():
             # Plot training values
             axs[i].plot(
                 train_dates,
-                ytrains[label],
+                ytrains_np[:, i],
                 label="Training",
                 marker='o',
                 color='green',
@@ -679,7 +688,7 @@ class PredictionModel():
             )
             axs[i].plot(
                 test_dates,
-                ytests[label],
+                ytests_np[:,i],
                 label="Test",
                 marker='o',
                 color='blue',
@@ -762,12 +771,12 @@ class PredictionModel():
                 relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             else:
                 relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
-            if not self.is_keras_model:
+            if "CXGB" in self.name_regressor:
                 relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
-                self.regressor.load_weights('model.h5')
+                self.regressor.load_weights('model_init.h5')
                 self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
@@ -847,12 +856,12 @@ class PredictionModel():
                 relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             else:
                 relevance_fs = {label: self.calculate_relevance_function(y_train, label) for label in self.labels}
-            if not self.is_keras_model:
+            if "CXGB" in self.name_regressor:
                 relevance_fs = {label: piecewise_linear_phi_np(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
             if self.is_keras_model:
                 X_train = self.reshape_for_keras(train_data)
                 X_test = self.reshape_for_keras(test_data)
-                self.regressor.load_weights('model.h5')
+                self.regressor.load_weights('model_init.h5')
                 self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
                 self.regressor.fit(X_train, y_train, epochs=200, batch_size=8, verbose=0, callbacks=[self.early_stopping], validation_data=(X_test, y_test))
                 pred = self.regressor.predict(X_test)
@@ -871,11 +880,18 @@ class PredictionModel():
             if plot:
                 self.plot_predictions(dates, len(test_index), y_train, ytrain_pred, y_test, pred)
             if label_plot:
-                cv_dates_list.append((train_dates, test_dates))
-                cv_ytrains_list.append(y_train.iloc[:, idx_label].values) 
-                cv_ypredtrains_list.append(ytrain_pred[:, idx_label])
-                cv_ytests_list.append(y_test[self.labels[idx_label]].values)
-                cv_ypreds_list.append(pred[:, idx_label])
+                if not self.whole_year:
+                    cv_dates_list.append((train_dates, test_dates))
+                    cv_ytrains_list.append(y_train.iloc[:, idx_label].values) 
+                    cv_ypredtrains_list.append(ytrain_pred[:, idx_label])
+                    cv_ytests_list.append(y_test[self.labels[idx_label]].values)
+                    cv_ypreds_list.append(pred[:, idx_label])
+                else:
+                    cv_dates_list.append((train_dates[-(len(test_dates)):], test_dates))
+                    cv_ytrains_list.append(y_train.iloc[-(len(test_dates)):, idx_label].values) 
+                    cv_ypredtrains_list.append(ytrain_pred[-(len(test_dates)):, idx_label])
+                    cv_ytests_list.append(y_test[self.labels[idx_label]].values)
+                    cv_ypreds_list.append(pred[:, idx_label])
             r2_tscv.append(r2_score(y_test, pred, multioutput="raw_values")) 
             mape_tscv.append(mean_absolute_percentage_error(y_test, pred, multioutput="raw_values"))
             mae_tscv.append(mean_absolute_error(y_test, pred, multioutput="raw_values"))
@@ -957,7 +973,8 @@ class PredictionModel():
                 linestyle='--',
                 linewidth=1.5
             )
-            ax.set_xlim([x_min, x_max])
+            if not self.whole_year:
+                ax.set_xlim([x_min, x_max])
             r2_text = f"R²: {r2_per_fold[fold_idx]:.3f}" if r2_per_fold is not None else ""
             mae_text = f"MAE: {mae_per_fold[fold_idx]:.3f}" if mae_per_fold is not None else ""
             mape_text = f"MAPE: {mape_per_fold[fold_idx]*100:.2f}%" if mape_per_fold is not None else ""
@@ -1129,8 +1146,10 @@ class PredictionExperiment():
     def execute_experiment(self, plot=False, label_plot=None):
         for season, models in self.models.items():
             for model in models:
+                t1 =time.time()
                 print("Train predicting ", season, model.name_regressor)
                 model.train_predict(self.len_pred, plot=plot, label_plot=label_plot)
+                print(f"Time Season {season} {model.name_regressor}: {time.time()-t1}")
 
     def get_metrics(self, metric, stage="prediction", thresh=0.5, above=True, show=True):
         results = pd.DataFrame(columns=["Model","Season","Bounds","I_w", "Metric", "Stage"]+ self.labels + ["Average"])
