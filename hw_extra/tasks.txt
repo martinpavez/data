@@ -137,5 +137,15 @@ Reu 03/07:
     Remember december mistake, was locally and 10mean does not look that imbalanced.
     Remember last year results were without month feature
 
+Reu 10/07:
+    Transfer learning: Could be training 11 months then adapt to the target month. 
+    (Check how to do it in scikit learn)
+    Set hypothesis for monthly preference over yearly, focusing on the features 
+    How differ features to impact the monthly model performance? e.g. vaguada are more frequents in winter
 
-CMiP6
+Transfer Learning:
+    - scikit learn is hard:
+        (month head) 1 way is to train a global model and then another specific whose supervised labels are the residuals of the global one
+        then the model makes two predictions.
+    - keras can do all the layer freezing strategy, but would need to re-do my software
+    

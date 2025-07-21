@@ -1,0 +1,63 @@
+Notes on CMIP models:
+
+On cluster we have:
+    SP
+        scenarios: ssp126, ssp245, ssp585
+        models: daily for ESM1.2 High Resolution 
+        dates: 2015-2100
+        grid: gn
+    TA (ta at level)
+        scenarios: ""
+        models: 6hrlev (with elevation idk level??) for ESM1.2 High Resolution
+        dates: ""
+        grid: gn
+    TAS (surface 2m)
+        scenarios: historical, picontrol, ssp119, ssp126, ssp245, ssp370, ssp585
+        models: 3hr GFDL-ESM4 
+        dates: historical 1850-2015, ssp 2015-2100
+        grid: gr1
+    U-wind:
+        scenaris: 126,245,285
+        models: daily MPI-ESM1.2HR
+        dates: 2015-2100
+        grid:gn
+
+Usually models are INSTITUTE-MODEL-RESOLUTION 
+6hr standard
+6hrLev at model levels (altitude levels)
+6hrPlev pressure levels (e.g. 850hPa)
+plevs: https://cmip6dr.github.io/Data_Request_Home/Documents/CMIP6_pressure_levels.pdf
+    basically if we need 850hpa, we need plev3, plev4(4s), plev5, plev8, plev10, plev11, plev19, plev23, plev27, plev39
+
+Two models: GFDL-ESM4 and MPI-ESM1.2 HR
+
+grids:
+gn: native grid of the model component
+gr: regridded to the regular target grid specified for the particular variable
+gr1: another target grid 
+
+MPI-ESM1.2HR, r1i1p1f1 has both 100km or 50km grids
+    historical:
+        daily has tos(sst), tas, tasmax, ua, psl
+        monthly has ""
+    ssp 126, 245, 370, 585
+        same
+
+GFDL-ESM4, r1i1p1f1 100km grids
+    historical:
+        daily  has tos, tas, tasmax, ua, psl
+        monthly  ""
+    ssps:
+        daily has everything except for ua (only uas). only ssp585 has this variable
+        monthly has everything
+
+EC-EARTH3, r1i1p1f1, 100km grids
+    historical and ssps have everything.
+
+Update library script for download CMIP6 data  
+
+Visualize some of the historical model vs era5, maybe construct the simplest index (like wind) and visualize how much they differ. 
+Remember grid is not the same always, so interpolation in small boxes could differ.
+
+Review how much do drivers differ cmip6 vs era5
+construct cmip6 raw to intermediate to standarize data: coordinates, units, nans. Path organize just 01_raw.
