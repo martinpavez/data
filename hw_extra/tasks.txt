@@ -148,4 +148,10 @@ Transfer Learning:
         (month head) 1 way is to train a global model and then another specific whose supervised labels are the residuals of the global one
         then the model makes two predictions.
     - keras can do all the layer freezing strategy, but would need to re-do my software
-    
+        
+
+Cluster:
+    monthly mean t2m
+    monthly mean 10m_u
+    monthly mean 10m_v
+    monthly mean geopotential 500hpa

@@ -46,7 +46,7 @@ MPI-ESM1.2HR, r1i1p1f1 has both 100km or 50km grids
 GFDL-ESM4, r1i1p1f1 100km grids
     historical:
         daily  has tos, tas, tasmax, ua, psl
-        monthly  ""
+        monthly  "" 
     ssps:
         daily has everything except for ua (only uas). only ssp585 has this variable
         monthly has everything
@@ -61,3 +61,49 @@ Remember grid is not the same always, so interpolation in small boxes could diff
 
 Review how much do drivers differ cmip6 vs era5
 construct cmip6 raw to intermediate to standarize data: coordinates, units, nans. Path organize just 01_raw.
+    Path structure should be the same as 01, only problem is that in era5 we agreed on only daily 
+    so now have to figure out how to structure monthly raws vs monthly aggregated:
+        my proposal would be to stablish Amon as raw and monthly_mean/daily or daily_mean/monthly,
+        e.g. source/scenario/table_id(freq)/variable/table_id(freq)
+             source/scenario/table_id(original freq)/method_variable/new_freq
+        Obviously, last frequency would be only lower than table_id from raw
+    (this problem assumes that we need monthly and daily in raw, prolly cs models at lower frequency are better than averaging higher frequency, but idk, ask fabrice)
+    ERA5 handles by creating directory "{method}_{var}"
+
+    Coordinates: rename latitude to longitude
+    units: same as era5: m/s, K, Pa
+    drop bounds?? and any other columns? they don't bother so personally wouldnt drop anything, but i remember somewhere in era5 we dropped e.g. "number"
+
+    Create new function in utils to unit conversion and regrid data
+
+    Download new models to compare between cmip6 models and vs era5 reanalysis
+    
+Ideas:
+    Check also ssp features? We can validate only from 2015-2023 (first available year ssp - last year era5 in cluster)
+
+    Run era5 trained model for cmip6 historical features and check performance,
+    also run for the 2015-2023 ssp and validate performance
+    ofc compare also the baseline (direct detection of hws from historical and ssp models)
+
+    Question: after all these validations, then we could report the model on ssp for future (2025-2100)?? (lack of validation)
+    
+Models:
+    CESM2
+    MIROC6
+    GISS: Does not have standard future scenarios (has ssp245-GHG, ssp585-bgc)
+    MRI
+    HadGEm: Only has hist-1950, idk the difference
+
+    Check availability of scenarios ssp119/126, middleground (245) and 585
+     
+Drivers:
+    Check coincidence between drivers in ERA5 then in CMIP6
+
+
+github:
+    create modules for each standarization of data, then call each function by model
+    
+Check correlations between same model and match them with cmip6 models
+Check vaguada index (should not work with anomalies, rather raw pressure)
+
+Construct drivers for scenarios and create sanity checks (fft or any stats for phenomena detection)

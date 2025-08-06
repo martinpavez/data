@@ -27,7 +27,6 @@ def check_availability(project,
         product="model-output",
         frequency=frequency,
         latest=True,
-        grid=grid,
         institution_id=institution_id,
         variant_label=variant_label,
         table_id=table_id,
@@ -66,7 +65,7 @@ def get_download_urls(project,
         experiment_id=experiment_id,
         product="model-output",
         frequency=frequency,
-        grid=grid,
+        latest=True,
         institution_id=institution_id,
         variant_label=variant_label,
         table_id=table_id,
@@ -82,6 +81,7 @@ def get_download_urls(project,
 
     # Print the total number of results
     print(f"Total hits: {hit_count}")
+    print(search_results)
 
     # Check if there are results
     if hit_count > 0:
@@ -144,6 +144,7 @@ def get_CMIP6_data(project,
         source_id=source_id,
         data_node=data_node
     )
+    print(download_urls)
 
     # Download the files
     download_datasets(download_urls, download_dir)
@@ -151,15 +152,15 @@ def get_CMIP6_data(project,
 if __name__ == "__main__":
     project = "CMIP6"
     variable = "psl"
-    experiment_id = "historical"
+    experiment_id = "ssp126"
     frequency = "mon"
-    grid = "gn"
-    institution_id = "MPI-M"
+    grid = "gr1"
+    institution_id = "EC-Earth-Consortium"
     variant_label = "r1i1p1f1"
     table_id = "Amon"
     
-    source_id = "MPI-ESM1-2-HR"
-    data_node = "esgf3.dkrz.de"
+    source_id = "EC-Earth3"
+    data_node = "esgf.ceda.ac.uk"
     download_dir = "./data/cmip6"
 
     get_CMIP6_data(project,
@@ -173,6 +174,16 @@ if __name__ == "__main__":
                    source_id,
                    data_node,
                    download_dir)
+    # hits, datasets = check_availability(project,
+    #                variable,
+    #                experiment_id,
+    #                frequency,
+    #                grid,
+    #                institution_id,
+    #                variant_label,
+    #                table_id,
+    #                source_id,
+    #                data_node)
     # print(f"Found {hits} datasets")
     # for ds in datasets:
     #     print(ds)

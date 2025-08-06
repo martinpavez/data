@@ -195,8 +195,10 @@ class MaxIndex(Index):
             
             for t in da[time_dim]:
                 time_data = da.sel({time_dim: t})
-                
-                max_value = time_data.max().item()
+                try:
+                    max_value = time_data.max().item()
+                except NotImplementedError:
+                    max_value = time_data.max().compute().item()
                 
                 max_indices = np.unravel_index(time_data.argmax(), time_data.shape)
                 
