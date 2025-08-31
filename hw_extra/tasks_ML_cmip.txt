@@ -1,0 +1,80 @@
+Open questions ML:
+    Objective: Compare predicted HWs indices from ML prediction for different ssp scenarios. 
+    1° Baseline:
+        Detect in daily tasmax for each model, ensemble models for hw indices (monthly, yearly, decadal).
+        Proposal is to work with 10 land points in the zone. Calculate hw indices for each point and average them (similar to averaging 10 stations).
+        Models tasmax are on 100km resolution. chile average width is 180km and longitude zone is about 950km (rodelillo to PM). 
+            Only have to be careful with geografic location of each point, i think the idea is the point simulate at most how the station in reality is.
+    1° Model: Train in ERA5/Meteochile and predict first in historical (for validation with decadal stats), then in ssp:
+
+        In historical predictions:
+            Validate transferability from machine by predicting in historical experiments:
+                - Ofc monthly would be terrible because of phasing, but get yearly/decadal statistics and compare
+                - Compare feature importance on these predictions
+                - 
+        - Learned patterns from ERA5 could be applied to ssp. 
+            This is a valid approach under the assumption that there is no big bias towards the relationship feature-labels in ERA5 across CMIP6 models (e.g. correlation era5 nino34-HWN vs cmip6 nino34-HWN)
+            Maybe we would have to measure first how differ the relationship feature-labels (like in historical experiments). If they match, then the era5 machine would predict reasonably.
+            How do we actually measure these relationships? We've been using pearson correlation but era5 best machine aint linear.
+        Methodology:
+            1. We have trained ERA5 machine
+            2. Measure bias in CMIP6 models ?? Basically what we have on Taylor Diagrams? 
+            3. Correct bias: Mean/variance scaling? Quantile Delta Mapping (QDM)? Equi-Distant Cumulative Density Function (EDCDF)? https://arxiv.org/pdf/2504.19145
+            4. Build ssp features. Those using climatology periods, use the historical data from the same model.
+            5. Predict and compare with 1° Baseline, get conclusions about ensemble indices across different scenarios.
+
+
+    2° Model: Train in historical and predict ssp:
+        - We just maintain the architecture of NNs (type, hyperparemeters, same monthly approach). So we train in historical (note it goes until 2014) and then predict in the same model.
+            This would give a more comparable to the baseline (daily tasmax same model) 
+        Methodology:
+            1. Build ssp features from raw data.
+            2. Labels should be an approximate from the same model to the 10stations from era5 machine' labels. 
+                Can't use directly meteochile labels, because the historical models not necesarilly follow the exact timing, so the feature-label relationship does not match timewise.
+                Label would be the same methodology as the 1° baseline.
+            3. Train machine same hyperparameters as ERA5 but using these features-labels.
+            4. Predict in scenarios and compare with 1° Baseline, get conclusions about ensemble indices across different scenarios.
+        
+        My biggest concern about this approach is the transferability of our ERA5 long-study to this approach. I think the transferability of hyperparameters is not strong, just a shortcut to find them.
+        Disadvantage on using cmip6 labels, they are chaotic. So whats the point on training with these labels? Hard they beat the baseline.
+        
+
+Tasmax historical resolutions:
+    100km : AWI, EC3, INM, MPI-M, MRI, GFDL
+    250km : MIROC6
+
+
+Anticyclone:
+    leave it there, but be concious about daily drivers + aggregation (anyways f mention that cmip6 models are better on monthly scale)
+
+
+Tasks:
+    Create new experiment with most recent drivers:
+        - local_climate/nino34 [190, 240, -5, 5] X
+        - local_climate/nino12 [270, 280, -10, 0] X
+        - ocean anticyclone (always_detect, 260,288,-45,-15) X
+        - highlowdiff vaguada (b,A_cl,A_arg) X
+        - advection_mean/blob (anomalies, 268|283|-32|-20) 
+        - advection_mean/chile (anomalies, 282|286|-42|-33)
+        - local_climate/u_north (raco) [287.5, 289.5, -37, -33]
+        - local_climate/u_south (puelche) [286.5, 288.5, -42, -37]
+        - local_climate/wind_psl (both raco and puelche) [286, 292, -52, -40] X
+        - local_climate/T (anomalies, 286|288|-42|-33)   X
+
+        - PDO is EOF on SSTanoms 120|240|20|60. Simplification: Anoms for now, then with jeremy pca X
+        - SAM is the difference between standardize anomalies of psl40°S, psl65°S. That is:  X
+                Average longitude points across 40S and 65S (maybe local_climate box mean for a lat=40)
+                first remove the season climatology (1 mean value per season)
+                standardize the timeserie
+                remove the mean of baseline (1971-2001)
+                anom40 - anom65
+            So for now:
+                anompsl40, anompsl65
+        - DMI is the difference of SSTanoms (according to a base period not determined) from boxes 50|70|-10|10 and 90|110|-10|0 X
+            So basically local_climate of tos for these boxes
+
+
+
+    create new experiment from ecf2577f but replace external indices with some simplification
+    Test + validate these two experiments
+    Train 3832cbd6, new 2 exps and predict in cmip6 data

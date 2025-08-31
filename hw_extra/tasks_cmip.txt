@@ -107,3 +107,41 @@ Check correlations between same model and match them with cmip6 models
 Check vaguada index (should not work with anomalies, rather raw pressure)
 
 Construct drivers for scenarios and create sanity checks (fft or any stats for phenomena detection)
+
+Git:
+    PR for download cmip6 data + testing
+    PR for raw to intermediate (separate pressure levels here and create directory):
+    (We want to standardize data to be similar to ERA5 data, easier for next layers processing)
+        - Change coordinates names
+        - regrid to standard latitudexlongitude grid. If need to create grid, go for 1x1 resolution
+        - change time from midmonth to first day month 
+        - Temperature from °C to °K (add global param), change unit in attrs
+            tos_e3["tos"].attrs["units"] = 'K'
+    Structure:
+        CMIP6/model/experiment/table_id/method_var/pressure_level/year.nc
+    Ready, only need docstrings
+ML:
+    Build ssp features:
+        How to define drivers that use climatology: first idea is build same driver but model dependant
+        be careful with resolution, every box should have atleast a grid point inside it.
+
+labels:
+    check historical models HW detection (daily tasmax)
+
+Git:
+    Create intermediate_to_primary for CMIP6 data. Try using same classes/methods that for cmip6
+        
+    check cmip6 dataset, not priority because there is now dataset driver class (for 03).
+    Research notebook for FFTs and correlations for historical features, to check same ERA5. (Taylor Diagrams)
+
+Cluster:
+    check data with jeremy
+
+PRs, issues
+    diagnose latitude direction
+    check init kwargs for drivers with mauro
+
+Git:
+    Change check on source to else raise valueerror
+    refactor latitude direction for era5 raw to intermediate
+    wait drivers.getdata for research notebook

@@ -8,7 +8,7 @@ import matplotlib.cm as cm  # For colormap
 import matplotlib.colors as mcolors  # For normalization
 import uuid
 
-
+import cftime
 # Doing design according to functionalities applied to a dataset,
 # but another design could be heritance from a xr.Dataset class and 
 # define additional functions to it.
@@ -166,60 +166,62 @@ class MaxIndex(Index):
     def find_monthly_maximums(self):
         """
         Find monthly maximums from an xarray Dataset along with their positions.
-        
-        Parameters:
-        -----------
-        ds : xarray.Dataset
-            The input dataset with gridded data
-        variable_name : str
-            Name of the variable in the dataset to find maximums for
-        
+
         Returns:
         --------
-        pandas.DataFrame
-            DataFrame with columns for maximum values and their positions
+        None
+            Saves results in self.index_dfs dictionary
         """
+
         for variable_name in self.variables:
             if variable_name not in self.variables:
                 raise ValueError(f"Variable '{variable_name}' not found in dataset")
-            
-            da = self.data[variable_name.lower()].sel(time=slice(f"{self.target_period[0]}-01",f"{self.target_period[1]}-12"))
+
+            da = self.data[variable_name.lower()].sel(
+                time=slice(f"{self.target_period[0]}-01", f"{self.target_period[1]}-12")
+            )
+
             time_dim = [dim for dim in da.dims if dim.lower() in ['time', 't']][0]
             lat_dim = [dim for dim in da.dims if dim.lower() in ['latitude', 'lat', 'y']][0]
             lon_dim = [dim for dim in da.dims if dim.lower() in ['longitude', 'lon', 'x']][0]
-            
+
             max_values = []
             max_lats = []
             max_lons = []
             timestamps = []
-            
+
             for t in da[time_dim]:
                 time_data = da.sel({time_dim: t})
                 try:
                     max_value = time_data.max().item()
                 except NotImplementedError:
                     max_value = time_data.max().compute().item()
-                
+
                 max_indices = np.unravel_index(time_data.argmax(), time_data.shape)
-                
+
                 max_lat = time_data[lat_dim].values[max_indices[0]].item()
                 max_lon = time_data[lon_dim].values[max_indices[1]].item()
-                
+
                 max_values.append(max_value)
                 max_lats.append(max_lat)
                 max_lons.append(max_lon)
-                timestamps.append(t.values)
-            
-            # Create DataFrame
+                timestamps.append(t.item())  # Use .item() instead of .values
+
+            # Detect if time is cftime or np.datetime64
+            if isinstance(timestamps[0], cftime.DatetimeNoLeap):
+                date_index = pd.Index(timestamps, name='Date')  # Use generic index
+            else:
+                date_index = pd.DatetimeIndex(timestamps, name='Date')  # Use datetime index
+
             df = pd.DataFrame({
                 'max_value': max_values,
                 'latitude': max_lats,
                 'longitude': max_lons
-            },  index=pd.DatetimeIndex(timestamps, name='Date'))
-            
+            }, index=date_index)
+
             self.index_dfs[variable_name] = df
 
-    def get_index(self, var=None, season=None, start_year=1972, end_year=2022):
+    def get_index(self, var=None, season=None, start_year=None, end_year=None):
         """
         Retrieves the index based on specified parameters.
         
@@ -229,9 +231,9 @@ class MaxIndex(Index):
             Variable name to filter by. If None, all variables are returned.
         season : str or list, optional
             Season or list of months to filter by. If None, all months are returned.
-        start_year : int, default=1972
+        start_year : int, default=None
             Start year for the query.
-        end_year : int, default=2022
+        end_year : int, default=None
             End year for the query.
             
         Returns:
@@ -239,6 +241,11 @@ class MaxIndex(Index):
         pandas.DataFrame
             The requested index data.
         """
+        if start_year is None:
+            start_year = self.target_period[0]
+        if end_year is None:
+            end_year = self.target_period[1]
+        
         # Check if years are within calculated range
         if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
             print("Can not retrieve for not calculated years")
@@ -258,17 +265,17 @@ class MaxIndex(Index):
         df.index.name = "Date"
         return df[(df.index.year<= end_year) & (df.index.year>= start_year)]
     
-    def get_index_by_variable(self, var, start_year=1972, end_year=2022):
-        """
-        Retrieves the full index.
-        """
-        if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
-            print("Can not retrieve for not calculated years")
-        else:
-            df = self.index_dfs[var]
-            df.index = df.index.to_numpy().astype('datetime64[M]')
-            df.index.name="Date"
-            return df[(df.index.year >= start_year) & (df.index.year <= end_year)]
+    # def get_index_by_variable(self, var, start_year=1972, end_year=2022):
+    #     """
+    #     Retrieves the full index.
+    #     """
+    #     if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
+    #         print("Can not retrieve for not calculated years")
+    #     else:
+    #         df = self.index_dfs[var]
+    #         df.index = df.index.to_numpy().astype('datetime64[M]')
+    #         df.index.name="Date"
+    #         return df[(df.index.year >= start_year) & (df.index.year <= end_year)]
     
     def index_df_to_parquet(self, var, folder_path, metadata_path):
         target_index = self.index_dfs[var]
@@ -350,7 +357,7 @@ class AnomaliesIndex(Index):
             return anomalies
     
 
-    def get_index(self, var=None, season=None, as_df=True, start_year=1972, end_year=2022):
+    def get_index(self, var=None, season=None, as_df=True, start_year=None, end_year=None):
         """
         Retrieves the index based on specified parameters.
         
@@ -362,9 +369,9 @@ class AnomaliesIndex(Index):
             Season or list of months to filter by. If None, all months are returned.
         as_df : bool, default=True
             Whether to return the result as a pandas DataFrame. If False, returns as xarray.
-        start_year : int, default=1972
+        start_year : int, default=None
             Start year for the query.
-        end_year : int, default=2022
+        end_year : int, default=None
             End year for the query.
             
         Returns:
@@ -372,6 +379,11 @@ class AnomaliesIndex(Index):
         xarray.Dataset or pandas.DataFrame
             The requested index data.
         """
+        if start_year is None:
+            start_year = self.target_period[0]
+        if end_year is None:
+            end_year = self.target_period[1]
+            
         # Check if years are within calculated range
         if (start_year-self.target_period[0] < 0) or (self.target_period[1]-end_year < 0):
             print("Can not retrieve for not calculated years")

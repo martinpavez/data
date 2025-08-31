@@ -155,3 +155,5 @@ Cluster:
     monthly mean 10m_u
     monthly mean 10m_v
     monthly mean geopotential 500hpa
+
+Features diagnostics: Define thresholds, revaluate indices, compare indices between them and corr with HWs

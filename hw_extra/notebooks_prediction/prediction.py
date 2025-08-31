@@ -150,7 +150,7 @@ id_experiments = metadata["id"].unique()
 ids_to_execute = [id for id in id_experiments if id not in ids_results]
 # print(id_experiments[10:])
 k=0
-for id in id_experiments[-2:]:
+for id in ids_to_execute:
     t1 = time.time()
     k+=1
     print("Executing",id, "iter", k)
