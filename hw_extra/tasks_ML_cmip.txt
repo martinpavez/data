@@ -50,18 +50,21 @@ Anticyclone:
 
 Tasks:
     Create new experiment with most recent drivers:
+        local_climate e.g.: calculate_kwargs="resample_freq=1MS;rolling_ window=1;lon_box=(50,70);lat_box=(-10,10);anomalies=True"
         - local_climate/nino34 [190, 240, -5, 5] X
         - local_climate/nino12 [270, 280, -10, 0] X
-        - ocean anticyclone (always_detect, 260,288,-45,-15) X
-        - highlowdiff vaguada (b,A_cl,A_arg) X
+        - ocean anticyclone (always_detect, 260,288,-45,-15) X calculate_kwargs="always_detect=True"
+        - highlowdiff vaguada (b,A_cl,A_arg) X (default)
         - advection_mean/blob (anomalies, 268|283|-32|-20) 
-        - advection_mean/chile (anomalies, 282|286|-42|-33)
-        - local_climate/u_north (raco) [287.5, 289.5, -37, -33]
-        - local_climate/u_south (puelche) [286.5, 288.5, -42, -37]
-        - local_climate/wind_psl (both raco and puelche) [286, 292, -52, -40] X
-        - local_climate/T (anomalies, 286|288|-42|-33)   X
+        - advection_mean/chile (anomalies, 282|286|-42|-33), here change lat and lon box
+        - local_climate/wind_cl_raco (raco) [287.5, 289.5, -37, -33]
+        - local_climate/wind_cl_puelche (puelche) [286.5, 288.5, -42, -37]
+        - local_climate/wind_pressure_arg (both raco and puelche) [286, 292, -52, -40] X
+        - local_climate/anom_ta_cl (anomalies, 286|288|-42|-33)   X
 
+        simplifications here use local_climate:
         - PDO is EOF on SSTanoms 120|240|20|60. Simplification: Anoms for now, then with jeremy pca X
+            anom_pdo
         - SAM is the difference between standardize anomalies of psl40°S, psl65°S. That is:  X
                 Average longitude points across 40S and 65S (maybe local_climate box mean for a lat=40)
                 first remove the season climatology (1 mean value per season)
@@ -70,11 +73,96 @@ Tasks:
                 anom40 - anom65
             So for now:
                 anompsl40, anompsl65
+            anom_psl_sam_40, anom_psl_sam_65
         - DMI is the difference of SSTanoms (according to a base period not determined) from boxes 50|70|-10|10 and 90|110|-10|0 X
             So basically local_climate of tos for these boxes
+            anom_dmi_east
+            anom_dmi_west
 
+    3832cbd6:
+        nino12
+        nino34
+        anticyclone
+        anom_wind_cl
+        anom_psl_A_Arg
+        anom_psl_b
+        anom_psl_A_cl
+        3832cbd6_psl_1 (anom psl for winds in arg)
 
 
     create new experiment from ecf2577f but replace external indices with some simplification
     Test + validate these two experiments
     Train 3832cbd6, new 2 exps and predict in cmip6 data
+
+
+sanity check (check hugo paper) for cmip6 historical
+tasmax to intermediate
+
+
+
+Issues:
+    Handle cftime from inm model. should this be on raw to intermediate?
+
+Questions:
+    - How to compare labels? we are predicting monthly and compare decadal would mean some aggregation on these label predictions.
+    For me, HWN and HWF is just sum over period. HWD and HWA would be the max of period.
+    HWM would be the sum of HWF*HWM of month / sum of hwf
+    Consider using sum of anomalies as index
+
+    - Is there anything to measure on future scenarios on heatwave detection? any sanity check before predicting? Yes, check hw detection on pesimist scenarios indep by model and then ensemble mean
+    For me its only the baseline to compare my predictions.
+    
+    - We used machines by monthy. Check if cmip6 represents the seasonality so we can build drivers and machines by season.
+
+
+intermediate to primary for labels.
+    Proposal: 
+        tasmax on intermediate for gridded, parquets on observational by station.
+        intermediate to primary would detect and detect + computation (so we can work on mauro's labels aswell)
+        ref period is in question? remember fixed is decided, if not then add ref period as variable filter?
+        Structure:
+            03_primary/heatwaves
+                /{index}/{method(meteochile or cxtp)}/variant
+                /events/
+            04_model_input/labels/{source}/regression_or_classification(detection or indices)/{index}/{method(meteochile or cxtp)}/variant
+
+        variant would indicate spatial (one or several stations/points) range + ref period
+
+        Software:
+            Refactor processing (intermediate to primary) by source to accept driver or heatwaves parameter
+            Labels dataset child Class
+
+
+
+INM-CM5-0
+MPI-ESM1-2-LR check resolution
+IPSL-CM6A-LR check resolution
+ACCESS-ESM1-5
+CNRM-CM6-1 (ceda.uk)
+CANESM5
+
+all good monthly (historical + 126,245,370,585)
+
+
+downloads:
+monthly:
+historical  psl, ta , ua XXXXXXXX
+historical  tos  XXXXXXXXX
+ssps psl XXXXXXXXXX
+ssps ta XXXXXXXXXX
+ssps ua XXXXXXXXX
+ssps tos XXXXXXX
+
+daily:
+historical tasmax
+126 tasmax
+245 tasmax
+370 tasmax
+585 tasmax
+
+
+drivers for ssp scenarios:
+    concat historical + ssp and check the difference between those branches
+
+
+
