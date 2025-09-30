@@ -50,34 +50,42 @@ Anticyclone:
 
 Tasks:
     Create new experiment with most recent drivers:
-        local_climate e.g.: calculate_kwargs="resample_freq=1MS;rolling_ window=1;lon_box=(50,70);lat_box=(-10,10);anomalies=True"
-        - local_climate/nino34 [190, 240, -5, 5] X
-        - local_climate/nino12 [270, 280, -10, 0] X
-        - ocean anticyclone (always_detect, 260,288,-45,-15) X calculate_kwargs="always_detect=True"
-        - highlowdiff vaguada (b,A_cl,A_arg) X (default)
-        - advection_mean/blob (anomalies, 268|283|-32|-20) 
-        - advection_mean/chile (anomalies, 282|286|-42|-33), here change lat and lon box
-        - local_climate/wind_cl_raco (raco) [287.5, 289.5, -37, -33]
-        - local_climate/wind_cl_puelche (puelche) [286.5, 288.5, -42, -37]
-        - local_climate/wind_pressure_arg (both raco and puelche) [286, 292, -52, -40] X
-        - local_climate/anom_ta_cl (anomalies, 286|288|-42|-33)   X
+        local_climate e.g.: calculate_kwargs="resample_freq=1MS;rolling_window=1;lon_box=(50,70);lat_box=(-10,10);anomalies=True"
+        TOS:
+            - local_climate/nino34 [190, 240, -5, 5] X
+            - local_climate/nino12 [270, 280, -10, 0] X
+            simplifications here use local_climate:
+            - PDO is EOF on SSTanoms 120|240|20|60. Simplification: Anoms for now, then with jeremy pca X
+                anom_pdo
+            - DMI is the difference of SSTanoms (according to a base period not determined) from boxes 50|70|-10|10 and 90|110|-10|0 X
+                So basically local_climate of tos for these boxes
+                anom_dmi_east
+                anom_dmi_west
 
-        simplifications here use local_climate:
-        - PDO is EOF on SSTanoms 120|240|20|60. Simplification: Anoms for now, then with jeremy pca X
-            anom_pdo
-        - SAM is the difference between standardize anomalies of psl40°S, psl65°S. That is:  X
-                Average longitude points across 40S and 65S (maybe local_climate box mean for a lat=40)
-                first remove the season climatology (1 mean value per season)
-                standardize the timeserie
-                remove the mean of baseline (1971-2001)
-                anom40 - anom65
-            So for now:
-                anompsl40, anompsl65
-            anom_psl_sam_40, anom_psl_sam_65
-        - DMI is the difference of SSTanoms (according to a base period not determined) from boxes 50|70|-10|10 and 90|110|-10|0 X
-            So basically local_climate of tos for these boxes
-            anom_dmi_east
-            anom_dmi_west
+        PSL:
+            - pacific anticyclone (always_detect, 260,288,-45,-15) X calculate_kwargs="always_detect=True"
+            - highlowdiff vaguada (b,A_cl,A_arg) X (default)
+            - local_climate/wind_pressure_arg (both raco and puelche) [286, 292, -52, -40] X
+            - SAM is the difference between standardize anomalies of psl40°S, psl65°S. That is:  X
+                    Average longitude points across 40S and 65S (maybe local_climate box mean for a lat=40)
+                    first remove the season climatology (1 mean value per season)
+                    standardize the timeserie
+                    remove the mean of baseline (1971-2001)
+                    anom40 - anom65
+                So for now:
+                    anompsl40, anompsl65
+                anom_psl_sam_40, anom_psl_sam_65
+
+        UA or TA:
+            - advection_mean/blob (anomalies, 268|283|-32|-20) 
+            - advection_mean/chile (anomalies, 282|286|-42|-33), here change lat and lon box
+            
+            - local_climate/wind_cl_raco (raco) [287.5, 289.5, -37, -33]
+            - local_climate/wind_cl_puelche (puelche) [286.5, 288.5, -42, -37]
+            
+            - local_climate/anom_ta_cl (anomalies, 286|288|-42|-33)   X
+
+        
 
     3832cbd6:
         nino12
@@ -165,4 +173,12 @@ drivers for ssp scenarios:
     concat historical + ssp and check the difference between those branches
 
 
+New models:
+    mpi match mpi
+    inm match inm
+    canesm5, access match ec earth
 
+
+Tasks:
+    Software for HW detection + stats so we can get baseline for CMIP6 models historical + scenarios 
+    define new hw indices and establish mathematical relationships between them.
