@@ -182,3 +182,16 @@ New models:
 Tasks:
     Software for HW detection + stats so we can get baseline for CMIP6 models historical + scenarios 
     define new hw indices and establish mathematical relationships between them.
+
+    Add detection for historical, to concatenate to ssps detection + predictions.
+
+Final thoughts:
+    Be sure that little changes on the machine (+- one driver, one label or initial parameters) does not affect the performance.
+
+
+Tasks:
+    Get new labels + new mathematical validation
+    Confirm temporal resolution transform works on meteochile labels:
+        Labels do not match monthly to yearly because of mean aggregation by stations, 
+        so max(time) of mean(stations) of maximums(time) monthly != mean(stations) of maximums(time) yearly
+    Repeat the ssp prediction plots + historical detection (not only historical prediction)
