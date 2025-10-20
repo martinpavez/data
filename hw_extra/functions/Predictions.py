@@ -532,7 +532,7 @@ class PredictionModel():
         self.whole_year = whole_year
         
         self.is_keras_model = hasattr(regressor, "fit") and hasattr(regressor, "predict") and hasattr(regressor, "compile")
-        self.data, self.features = self.form_matrix(data)
+        self.data, self.features = data, data.columns.difference(self.labels)
         if self.is_keras_model:
             self.early_stopping = EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
         self.custom_loss = loss_fn
@@ -546,14 +546,13 @@ class PredictionModel():
         #data['Date'] = pd.to_datetime(data['Date'])
         #data['Date'] = data['Date'].dt.to_period('M').astype(str)
 
-        features = data.columns.difference(self.labels)
         self.label_scaler = StandardScaler()
-        data[self.labels] = self.label_scaler.fit_transform(data[self.labels])
+        data.loc[:, self.labels] = self.label_scaler.fit_transform(data[self.labels])
         if "SVR" in self.name_regressor or self.is_keras_model:
-            self.scaler_X = StandardScaler().fit(data[features])
-            data[features] = self.scaler_X.transform(data[features])
+            self.scaler_X = StandardScaler().fit(data[self.features])
+            data.loc[:, self.features] = self.scaler_X.transform(data[self.features])
         
-        return data, features
+        return data[self.features], data[self.labels]
     
     def reshape_for_keras(self, X):
         return np.expand_dims(X, axis=1)
@@ -580,6 +579,8 @@ class PredictionModel():
         
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
+        X_train, y_train = self.form_matrix(pd.concat((X_train, y_train), axis=1))
+        y_test = self.label_scaler.transform(y_test)
 
         if isinstance(self.custom_loss, SERA):
             relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
@@ -608,6 +609,7 @@ class PredictionModel():
         return y_train, y_pred_train
 
     def predict(self, len_pred):
+        # missing normalization after refactor on training for ssps
         X = self.data[self.features]
         y = self.data[self.labels]
         

@@ -195,3 +195,72 @@ Tasks:
         Labels do not match monthly to yearly because of mean aggregation by stations, 
         so max(time) of mean(stations) of maximums(time) monthly != mean(stations) of maximums(time) yearly
     Repeat the ssp prediction plots + historical detection (not only historical prediction)
+
+Test combinations of labels, maybe according to their mathematical relationship
+    1° Iteration:
+        - hwf,hwm,hwi: only improvement we see is in the mathematical validation (from around 0.4,0.6 in averaged time down to 0.1,0.2)
+        - hwn, hwf, hwmeand: hwmeand looks better trends according to ssp scenarios but no extreme value prediction. Also improves mathematical validation, from fluctuating -0.2,0.2 down to -0.1,0.1.
+        - hwn, hwi, hwmeani: hwn and hwi better trends (not really significant) and hwmeani looks flatter. mathematical validation looks the same (between -0.2,0).
+        - hwd, hwa, hwmaxi: Nice improvement in shape, the machine risks more to predict extreme values, specially in hwd and hwa, while keeping the trends accross scenarios.
+    
+    2° Iteration (including era5 pred train, train 2022, dispersion) vs ssp_pred_2022 "full"
+        - hwf, hwm, hwi: 
+            1. pred vs det: hwf looks better on pred (worst scenarios have peaks that full does not), hwm is better adjusted to meteochile, so the pred is far better. hwi looks the same.
+            2. dispersion: hwm has high dispersion (as in full), and one can see the positive trend on the mean models for this machine.
+            3. validation: decent, between -0.2 and 0.1 for every ssp.
+        - hwmeand, hwf, hwn:
+            1. pred vs det: Adjust to meteochile looks the same, but we see better distinction between scenarios only for hwmeand.
+            2. dispersion looks the same
+            3. val looks good (-0.1,0.1)
+        - hwn, hwi, hwmeani
+            1. training looks better, so again the distinction between scenarios and trends are better.
+            2. dispersion looks the same, but means on scenarios looks positive, while in full they look flat.
+            3. val between -0.2 and 0.3
+        - max labels: 
+            1. training looks better only for hwa (closer to meteochile), so the trends on ssp pred looks good (kinda close to detection).
+            2. both ssp trends are steeper on these machines, the dispersion range looks the same.
+        
+        - freq and intenstiy labels look the same as full, maybe 3 is kinda the magic number to adjust good our labels to meteochile (19 features).
+
+(IDEA) Based on distribution?? so they match their SERA:
+        - hwn, hwf, hwi
+        - hwm, hwa, hwmeani, hwmaxi
+        - hwd, hwmeand
+
+Full Labels Problems:
+    1. On dispersion plots, one can see that for each scenario, the mean models looks always flat (in comparison to their detection). 
+
+Tasks:
+    Build drivers for new cmip6 models (historical and ssps).
+
+
+Tasks:
+    Review ML (sera, hyperparameters, architecture)
+    Incorporate era5 training prediction + detection in figure, so we can match how the model fits the meteochile curve.
+    The idea is to improve historical cmip6 prediction (closer to meteochile than the historical detection).
+
+    check how each model performs in the historical (vs meteochile), maybe 
+
+    maybe transform labels into higher temporal resolution, so the phase effect is  neglected
+        currently mean scenario is built on monthly predictions then to yearly labels !!!
+            - Go to yearly first (or 5/10 yearly even) then mean of models!!
+
+    Missing:
+        1. Check plot results of label combinations (2° iteration)
+        2. 5/10 years before models mean
+        3. Maybe new intuition around SERA with the new distributions.
+        
+Tasks:
+    1. include min,max range instead of mean or median + iqr:
+        - Looks better than using dispersion, we can track how the range of the models reproduce meteochile.
+        - I'd trust only the models where mainly ssp585 > ssp126
+    2. choose representative model for the historical scenario. 
+        - used mae for interpretation but can't average this to create a metric by model (as magnitudes of labels differ a lot)
+        - used mape for averaging error to choose better model
+        - anyways phase is still a problem as it goes yearly, we are comparing reality vs the model phase (point by point).
+    3. develop a weighted average for the ssp prediction
+        So if this is a good idea, we have to come up with a good metric to compare historical vs meteochile.
+
+Tasks:
+    1. Complete ERA5, meteochile data (1970-2024)
+    2. Review SERA and architecture
