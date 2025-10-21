@@ -264,3 +264,31 @@ Tasks:
 Tasks:
     1. Complete ERA5, meteochile data (1970-2024)
     2. Review SERA and architecture
+
+Q:
+    - As we are doing supervised, is it valid to get sera bounds using all samples?? or should be only from training
+    - IDK if best idea is to use training to 2022, its true we have more data and include last year peaks, but NN work on early stopping using val data, if we train
+    to 2022, then we only have 1 point per machine as val data for early stop. In graphics, they look good (good fit), but this could be exactly overfitting.
+
+
+SERA improvement:
+    - With new bounds, 5 and even 9 labels Machines are fitting well. Now the only reason to split them is either:
+        1. Adjust sera even more to subset of labels
+        2. Improve mathematical validation to subset of labels
+    
+    They aint always compatible, as mathematical validation force subset of labels that not always come from the same distribution, then bounds aint close.
+
+
+Introduction:
+    1. Motivation:
+        - Importance of heatwave prediction
+    2. Context:
+        - Challenges in this project.
+    3. State of the art
+    4. Hypothesis
+    
+Methodology:
+    1. Data (source and processing)
+    2. Features
+    3. Labels 
+    4. Machine (decisions)

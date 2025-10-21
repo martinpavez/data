@@ -566,7 +566,7 @@ class PredictionModel():
     def sera_error_multioutput(self, y_true, y_pred, relevance):
         sera = np.zeros(len(list(relevance.values())))
         for i, label in enumerate(list(relevance.keys())):
-            if self.is_keras_model:
+            if self.is_keras_model and isinstance(self.custom_loss, SERA):
                 sera[i] = self.custom_loss.call(y_true, y_pred)
             else:
                 sera[i], _, _ = compute_sera(y_true[[label]].to_numpy(), y_pred[:, i], relevance[label])
@@ -580,6 +580,7 @@ class PredictionModel():
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
         X_train, y_train = self.form_matrix(pd.concat((X_train, y_train), axis=1))
+        X_test = self.scaler_X.transform(X_test)
         y_test = self.label_scaler.transform(y_test)
 
         if isinstance(self.custom_loss, SERA):
@@ -615,6 +616,8 @@ class PredictionModel():
         
         # Split into training and testing sets
         X_train, X_test, y_train, y_test = X[:-len_pred], X[-len_pred:], y[:-len_pred], y[-len_pred:]
+        X_test = self.scaler_X.transform(X_test)
+        y_test = self.label_scaler.transform(y_test)
         
         if isinstance(self.custom_loss, SERA):
             relevance_fs = {label: piecewise_linear_phi_2(self.custom_loss.bounds, initial_weight=self.custom_loss.initial_w) for label in self.labels}
@@ -709,7 +712,7 @@ class PredictionModel():
             axs[i].set_title(f"Prediction for {self.labels[i]}")
             axs[i].legend()
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-        fig.suptitle(f"Model: {self.name_regressor}")
+        fig.suptitle(f"Model: {self.name_regressor}, Season {self.season}")
         plt.show()
     
     def get_metric(self, metric, stage="prediction"):
