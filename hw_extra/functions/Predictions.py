@@ -447,6 +447,7 @@ class XGBCustomObjective(BaseEstimator, RegressorMixin):
     def __init__(self, objective_func=None, random_state=42, n_estimators=15, learning_rate=0.1, max_depth=6, subsample=0.8, colsample_bytree=0.8, **kwargs):
         self.objective_func = objective_func
         self.n_estimators = n_estimators
+        self.random_state = random_state
         self.learning_rate = learning_rate
         self.max_depth = max_depth
         self.subsample = subsample

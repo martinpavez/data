@@ -80,8 +80,8 @@ Tasks:
             - advection_mean/blob (anomalies, 268|283|-32|-20) 
             - advection_mean/chile (anomalies, 282|286|-42|-33), here change lat and lon box
             
-            - local_climate/wind_cl_raco (raco) [287.5, 289.5, -37, -33]
-            - local_climate/wind_cl_puelche (puelche) [286.5, 288.5, -42, -37]
+            - local_climate/wind_cl_raco (raco) [287.5, 289.5, -37, -33] (watch out inm5-0 two points at (286.875 , 289.6875; -34.88) then used lon_box=(286,290);lat_box=(-38,-33))
+            - local_climate/wind_cl_puelche (puelche) [286.5, 288.5, -42, -37] 
             
             - local_climate/anom_ta_cl (anomalies, 286|288|-42|-33)   X
 
@@ -283,12 +283,46 @@ Introduction:
     1. Motivation:
         - Importance of heatwave prediction
     2. Context:
-        - Challenges in this project.
+        - Challenges in this project:
+            Heatwaves are extreme events
+            currently only classification, we do regression (then extreme value prediction)code 
+            Long term forecasting, currently mostly short term prediction of hw (days or weeks)
+
     3. State of the art
     4. Hypothesis
     
 Methodology:
     1. Data (source and processing)
+        Meteochile for heatwave detection  
+        ERA5 for drivers + hw detection
+        CMPI6 for prediction + hw detection
     2. Features
     3. Labels 
     4. Machine (decisions)
+
+
+Move heatwaves before drivers and include a chapter of statistical results of drivers with hws
+
+
+Tasks:
+    - X Meteochile NaNs values by station
+    - X Incremental porcentage by decade for the ssp scenarios to answer if hw will be more frequent, intense based on the ensemble mean from decadal labels from cmip6 models.
+
+Qs:
+    1. Had hard time finding the coherency between our assesment on performance on era5 vs the model we use on cmip6, 
+       My best idea know is to go again era5 best model (cs we have more data now till 2024-12) and also to asses performance now on the 12-season ensemble model,
+       this sounds better because we then choose that best model that performance across the yearly span
+           Advantages:
+                I. Consistency on architecture for cmip6
+                II. Robustness on validation + test sets (monthly model had only few points for this, now 12*)
+
+    2. Check results to include
+
+Tasks:
+    - X Get 2024 drivers +labels + new performance metrics on 12-season model ensemble. 
+    - X finish historical hw indices with new models figure
+    -   finish cmip6 detection figure (choose one representative or the range per scenario)
+    - X Rewrite drivers correlation with hws.
+    - X Review drivers pairwise correlation.
+    - era5 results figure about across models in testing dataset
+    - difference pairwise correlation drivers historical cmip6 vs ssps (tu support discussion from hw difference in prediction)
