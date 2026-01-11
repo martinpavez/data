@@ -321,11 +321,11 @@ Qs:
 Tasks:
     - X Get 2024 drivers +labels + new performance metrics on 12-season model ensemble. 
     - X finish historical hw indices with new models figure
-    -   finish cmip6 detection figure (choose one representative or the range per scenario)
+    - X finish cmip6 detection figure (choose one representative or the range per scenario)
     - X Rewrite drivers correlation with hws.
     - X Review drivers pairwise correlation.
     - X era5 results figure about across models in testing dataset
-    - difference pairwise correlation drivers historical cmip6 vs ssps (tu support discussion from hw difference in prediction)
+    - X difference pairwise correlation drivers historical cmip6 vs ssps (to support discussion from hw difference in prediction)
 
 Questions:
     - What if predictions is below 0 unscaled? Should we set it to 0?
