@@ -329,4 +329,32 @@ Tasks:
 
 Questions:
     - What if predictions is below 0 unscaled? Should we set it to 0?
-    
+
+
+Questions:
+    - Library chapter?: Kedro layers, general idea of the software we develop 
+
+Figures:
+    1. cmip6 hw detection: 
+        - New notebook under research/diagnostics/
+        - No new code
+    2. drivers era5 correlation full vs monthly:
+        - New notebook under research/diagnostics ?
+        - No new code
+    3. drivers historical pairwise correlation:
+        - Update research/cmip6/05_drivers_historical_experiment.ipynb with new tables
+        - No new code
+    4. drivers ssps:
+        - New notebook under research/CMIP6/ or research/drivers ?
+        - No new code
+    5. historical hw detection:
+        - update research/CMIP6/04_historical_hw_indices
+        - No new code
+    6. era5 ML:
+        - new notebook under research/prediction ?
+        - New ML code or follow ML Short (seems no new code built)
+    7. ML for SSP prediction:
+        - new notebook under research/CMIP6
+
+
+Ask postgrado about rules about weeks in february

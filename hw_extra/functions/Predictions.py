@@ -482,7 +482,7 @@ class XGBCustomObjective(BaseEstimator, RegressorMixin):
             )
         else:
             # Train with standard objective
-            params['objective'] = 'reg:squarederror'
+            params['objective'] = 'reg:absoluteerror'
             del params['disable_default_eval_metric']
             self.model = xgb.train(
                 params=params,
