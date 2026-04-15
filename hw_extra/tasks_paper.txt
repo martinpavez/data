@@ -1,0 +1,49 @@
+AIES:
+
+1. Up to 7500 words, including the body text, acknowledgments, and appendixes. The word limit does not include the title page,
+   abstract, references, captions, tables, and figures. If a submission exceeds the word limit, the author must provide a justification 
+   for the length of the manuscript and request the Chief Editor’s approval of the overage.
+
+2. Always incorporate Limitations and future tasks (already included summarizing from thesis)
+
+3. AIES Narrative usually targets ML as a postprocessing when its used already on projections. 
+   Then, the narrative of our paper should be rewritten as an ML framework for adjusting (postprocessing) of GCMs outputs, rather than ML long term forecasts. 
+   This aligns with our project as our main justification is the bias from HW detection in daily GCMs.
+
+4. Message from 
+    "We use ML to predict future heatwaves under climate change scenarios"
+    to 
+    "Large-scale climate predictors derived from reanalysis and climate model simulations provide partial information about heatwave dynamics, 
+    but their direct use is limited by spatial resolution and biases. In this study, we assess whether statistical learning methods can extract 
+    and translate this information into accurate local heatwave indicators, and evaluate the robustness of these relationships under future climate forcing scenarios."
+
+5. Detail a bit more the Impact of the findings. Not only mention "can be used as grounds for policy makers", rather claim how they can be used.
+
+6. As other AIES papers, include image of map of boxes for predictors.
+
+7. Significance Statement.
+
+
+
+Tasks:
+
+- Appendices: 
+    - Drivers SSPs
+    - Math validation
+- Plot from world map and boxes of drivers
+
+
+
+Tasks:
+Split data and method in:
+    1. data and heatwave detection
+    2. geofisica de hw predictors 
+    3. rest of ML design (experiments)
+
+
+Introduction:
+    Present main gap we want to fill (daily GCM doesnt work so we offer an ML approach). 
+    But this is not easy, so several challenges arises and we present these solutions. These solutions worked so its novel.
+
+
+ 
